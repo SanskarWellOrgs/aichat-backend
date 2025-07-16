@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Study Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      background: #f8f9fa;
+      margin: 0;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .container {
+      background: #fff;
+      margin-top: 32px;
+      border-radius: 18px;
+      box-shadow: 0 2px 18px 0 #0001;
+      width: 720px;
+      display: flex;
+      flex-direction: column;
+      min-height: 650px;
+      overflow: hidden;
+    }
+    .header {
+      padding: 22px 30px 14px 30px;
+      font-size: 1.7rem;
+      font-weight: 700;
+      background: #234175;
+      color: #fff;
+      letter-spacing: 1px;
+      border-bottom: 1px solid #eee;
+    }
+    .chat-box {
+      flex: 1;
+      background: #f7f9fc;
+      padding: 28px 24px 12px 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .msg-row {
+      display: flex;
+      align-items: flex-end;
+      margin-bottom: 0;
+    }
+    .msg-bubble {
+      max-width: 80%;
+      padding: 13px 18px;
+      font-size: 1.09rem;
+      border-radius: 16px;
+      margin-bottom: 2px;
+      white-space: pre-wrap;
+      word-break: normal;
+      line-height: 1.44;
+    }
+    .bot {
+      background: #e6eefc;
+      color: #234175;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .user {
+      background: #19a344;
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .input-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px 14px 16px;
+      background: #f3f4f8;
+      border-top: 1px solid #e5e5e5;
+      position: relative;
+      z-index: 1;
+    }
+    select, input[type="text"] {
+      padding: 7px 12px;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      margin-right: 2px;
+    }
+    select {
+      min-width: 98px;
+    }
+    .grade-select {
+      min-width: 82px;
+      margin-left: 0;
+    }
+    .pin-upload {
+      font-size: 1.36rem;
+      cursor: pointer;
+      background: none;
+      border: none;
+      outline: none;
+      margin: 0 4px 0 3px;
+    }
+    .file-input {
+      display: none;
+    }
+    .file-name {
+      font-size: 0.98em;
+      color: #888;
+      margin-right: 6px;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .text-input {
+      flex: 1 1 auto;
+      padding: 9px 16px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 1rem;
+      background: #fff;
+      margin-left: 4px;
+      margin-right: 2px;
+      min-width: 140px;
+      max-width: 300px;
+    }
+    .send-btn {
+      background: #234175;
+      color: #fff;
+      border: none;
+      padding: 9px 21px;
+      font-size: 1.08rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.17s;
+      margin-left: 3px;
+    }
+    .send-btn:hover {
+      background: #3265b1;
+    }
+    .streaming-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 100%;
+      background: #3a8df6;
+      margin-left: 8px;
+      animation: blink 0.7s infinite alternate;
+      vertical-align: middle;
+    }
+    @keyframes blink {
+      from { opacity: 1; }
+      to { opacity: 0.25; }
+    }
+    .links-list a {
+      color: #1976d2;
+      text-decoration: underline;
+      font-size: 0.99em;
+    }
+    .links-list {
+      margin-top: 7px;
+      margin-bottom: 7px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .summary-block {
+      font-size: 1.06em;
+      margin-bottom: 6px;
+      font-weight: 500;
+      color: #294062;
+    }
+    .audio-status {
+      font-size: 0.96em;
+      color: #888;
+      margin-left: 9px;
+      vertical-align: middle;
+    }
+    .error-msg {
+      color: #fff;
+      background: #d32f2f;
+      border-radius: 7px;
+      padding: 8px 16px;
+      font-size: 1em;
+      margin: 6px 0;
+      display: inline-block;
+    }
+    @media (max-width: 600px) {
+      .container { width: 98vw; min-height: 98vh; }
+      .header, .chat-box, .input-bar { padding-left: 7px; padding-right: 7px; }
+      .chat-box { padding-top: 12px; }
+      .input-bar { flex-wrap: wrap; }
+      .text-input { min-width: 80px; max-width: 140px; }
+      .send-btn { padding: 8px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">AI Study Assistant</div>
+    <div class="chat-box" id="chatBox"></div>
+    <form class="input-bar" id="inputForm" autocomplete="off">
+      <span id="fileName" class="file-name"></span>
+      <button type="button" class="pin-upload" id="fileBtn" title="Upload File">📎</button>
+      <input type="file" id="fileInput" class="file-input" accept=".pdf" />
+      <span id="uploadStatus"></span>
+      <span id="imageName" class="file-name"></span>
+      <button type="button" class="pin-upload" id="imageBtn" title="Upload Image">🖼️</button>
+      <input type="file" id="imageInput" class="file-input" accept="image/*" />
+      <span id="imageUploadStatus"></span>
+      <select id="roleSelect">
+        <option value="teacher">Teacher</option>
+        <option value="student">Student</option>
+      </select>
+      <select id="gradeSelect" class="grade-select" style="display:none;">
+        <option value="">Select Grade</option>
+        <option value="Grade 1">Grade 1</option>
+        <option value="Grade 2">Grade 2</option>
+        <option value="Grade 3">Grade 3</option>
+        <option value="Grade 4">Grade 4</option>
+        <option value="Grade 5">Grade 5</option>
+        <option value="Grade 6">Grade 6</option>
+        <option value="Grade 7">Grade 7</option>
+        <option value="Grade 8">Grade 8</option>
+        <option value="Grade 9">Grade 9</option>
+        <option value="Grade 10">Grade 10</option>
+        <option value="Grade 11">Grade 11</option>
+        <option value="Grade 12">Grade 12</option>
+      </select>
+      <select id="languageSelect">
+        <option value="english">English</option>
+        <option value="arabic">Arabic</option>
+      </select>
+      <input type="text" class="text-input" id="queryInput" placeholder="Type your message..." />
+      <button type="submit" class="send-btn">Send</button>
+    </form>
+  </div>
+<script>
+  
+  // ---------- FILE UPLOAD ----------
+  let botResponded = false;
+  const fileBtn = document.getElementById('fileBtn');
+  const fileInput = document.getElementById('fileInput');
+  const fileName = document.getElementById('fileName');
+  let uploadedFile = null;
+  let uploadedFileUrl = null; // Store file_url persistently
+
+fileBtn.onclick = () => fileInput.click();
+fileInput.onchange = async () => {
+  if (fileInput.files && fileInput.files.length > 0) {
+    uploadedFile = fileInput.files[0];
+    fileName.textContent = uploadedFile.name.length > 22 ? uploadedFile.name.slice(0, 19) + '...' : uploadedFile.name;
+    uploadedFileUrl = null; // Clear file_url on new selection, force re-upload
+
+    // --- Immediate upload on file select ---
+    const formData = new FormData();
+    formData.append('file', uploadedFile);
+    document.getElementById('uploadStatus').textContent = 'Uploading...';
+    try {
+      const resp = await fetch('/update-file', { method: 'POST', body: formData });
+      const j = await resp.json();
+      if (j.file_url) {
+        uploadedFileUrl = j.file_url;
+        document.getElementById('uploadStatus').textContent = 'File uploaded!';
+      } else {
+        document.getElementById('uploadStatus').textContent = 'Upload failed!';
+      }
+    } catch (err) {
+      document.getElementById('uploadStatus').textContent = 'Upload error!';
+    }
+  } else {
+    uploadedFile = null;
+    fileName.textContent = "";
+    uploadedFileUrl = null;
+    document.getElementById('uploadStatus').textContent = '';
+  }
+};
+
+  // ---------- IMAGE UPLOAD ----------
+  const imageBtn = document.getElementById('imageBtn');
+  const imageInput = document.getElementById('imageInput');
+  const imageName = document.getElementById('imageName');
+  let uploadedImage = null;
+  let uploadedImageUrl = null;
+
+  imageBtn.onclick = () => imageInput.click();
+  imageInput.onchange = async () => {
+    if (imageInput.files && imageInput.files.length > 0) {
+      uploadedImage = imageInput.files[0];
+      imageName.textContent = uploadedImage.name.length > 22
+        ? uploadedImage.name.slice(0, 19) + '...'
+        : uploadedImage.name;
+      uploadedImageUrl = null;
+      const formDataImg = new FormData();
+      formDataImg.append('file', uploadedImage);
+      document.getElementById('imageUploadStatus').textContent = 'Uploading...';
+      try {
+        const resp = await fetch('/update-image', { method: 'POST', body: formDataImg });
+        const j = await resp.json();
+        if (j.file_url) {
+          uploadedImageUrl = j.file_url;
+          document.getElementById('imageUploadStatus').textContent = 'Image uploaded!';
+        } else {
+          document.getElementById('imageUploadStatus').textContent = 'Upload failed!';
+        }
+      } catch (err) {
+        document.getElementById('imageUploadStatus').textContent = 'Upload error!';
+      }
+    } else {
+      uploadedImage = null;
+      imageName.textContent = '';
+      uploadedImageUrl = null;
+      document.getElementById('imageUploadStatus').textContent = '';
+    }
+  };
+
+  // ---------- ROLE SELECT ----------
+  document.getElementById('roleSelect').addEventListener('change', function() {
+    document.getElementById('gradeSelect').style.display = (this.value === 'student') ? 'inline-block' : 'none';
+  });
+
+  // ---------- AUDIO STREAMING UTILS ----------
+
+let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+let playTime = 0;
+
+// Utility: convert backend hex string to ArrayBuffer
+function hexToArrayBuffer(hex) {
+  let bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return bytes.buffer;
+}
+
+// Call this on each new chunk (pass hex string from backend as input)
+function enqueueAudioChunk(hexString) {
+  const buffer = hexToArrayBuffer(hexString);
+  audioContext.decodeAudioData(
+    buffer,
+    decodedData => {
+      const source = audioContext.createBufferSource();
+      source.buffer = decodedData;
+      source.connect(audioContext.destination);
+      // Play immediately on decode to minimize any gap between chunks
+      // Schedule playback to avoid overlap: start immediately or at playTime
+      const now = audioContext.currentTime;
+      const startTime = playTime > now ? playTime : now;
+      source.start(startTime);
+      playTime = startTime + decodedData.duration;
+    },
+    () => {
+      // skip on decode error
+    }
+  );
+}
+
+function stopAllAudio() {
+  if (audioContext) {
+    try { audioContext.close(); } catch {}
+  }
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  playTime = 0;
+}
+  // ---------- MAIN FORM SUBMISSION & SSE ----------
+  const chatBox = document.getElementById('chatBox');
+  const inputForm = document.getElementById('inputForm');
+  let lastBotRow = null;
+  let eventSource = null;
+  let textStreamingActive = false; // Track if answer is in progress
+
+  // ----------- RTL Font for Arabic -----------
+  function applyBubbleDirection(bubble, language) {
+    if (language === "Arabic") {
+      bubble.dir = "rtl";
+      bubble.style.fontFamily = "'Noto Naskh Arabic', 'Amiri', 'Arial', sans-serif";
+      bubble.style.textAlign = "right";
+    } else {
+      bubble.dir = "ltr";
+      bubble.style.fontFamily = "";
+      bubble.style.textAlign = "left";
+    }
+  }
+
+  inputForm.onsubmit = async function(e) {
+    e.preventDefault();
+    if (textStreamingActive) return; // Prevent sending until previous done
+
+    const query = document.getElementById('queryInput').value.trim();
+    if (!query) return;
+
+    // Gather context
+    const role = document.getElementById('roleSelect').value;
+    const grade = document.getElementById('gradeSelect').style.display !== "none" ? document.getElementById('gradeSelect').value : "";
+    const language = document.getElementById('languageSelect').value;
+
+    // Add user message
+    const userRow = document.createElement('div');
+    userRow.className = 'msg-row';
+    userRow.style.justifyContent = 'flex-end';
+    const userBubble = document.createElement('div');
+    userBubble.className = 'msg-bubble user';
+    userBubble.textContent = query;
+    applyBubbleDirection(userBubble, language);
+    userRow.appendChild(userBubble);
+    chatBox.appendChild(userRow);
+
+    // Add bot typing placeholder
+    const botRow = document.createElement('div');
+    botRow.className = 'msg-row';
+    const botBubble = document.createElement('div');
+    botBubble.className = 'msg-bubble bot';
+    botBubble.innerHTML = `<span class="streaming-dot"></span> Generating...`;
+    applyBubbleDirection(botBubble, language);
+    botRow.appendChild(botBubble);
+    chatBox.appendChild(botRow);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    lastBotRow = botRow;
+
+    // ----- FILE UPLOAD LOGIC -----
+    // If no file uploaded yet or a new file is selected, upload file and cache file_url
+
+
+    // Start SSE connection for streaming output
+    let url = `/stream-answer?question=${encodeURIComponent(query)}&role=${encodeURIComponent(role)}&grade=${encodeURIComponent(grade)}&language=${encodeURIComponent(language)}`;
+    if (uploadedFileUrl) url += `&file_url=${encodeURIComponent(uploadedFileUrl)}`;
+    if (uploadedImageUrl) url += `&image_url=${encodeURIComponent(uploadedImageUrl)}`;
+
+    // Stop previous audio and event stream
+    if (eventSource) try { eventSource.close(); } catch(e){}
+    stopAllAudio();
+
+    botResponded = false;
+    eventSource = new EventSource(url);
+    textStreamingActive = true; // Lock input
+    // buffer audio chunks per sentence to decode once
+    let currentAudioChunks = [];
+
+    // Streaming state
+    let partialText = "";
+    let summaryBlock = null;
+    let linksList = null;
+    let audioStatus = null;
+    botBubble.innerHTML = "";
+
+    // Add containers for streaming content
+    const textDiv = document.createElement('div');
+    textDiv.style.marginBottom = "8px";
+    botBubble.appendChild(textDiv);
+
+    audioStatus = document.createElement('span');
+    audioStatus.className = "audio-status";
+    audioStatus.style.display = "none";
+    botBubble.appendChild(audioStatus);
+
+    let imageDiv = null, graphDiv = null;
+
+    eventSource.onmessage = async function(ev) {
+      if (!ev.data) return;
+      let data = {};
+      try { data = JSON.parse(ev.data); } catch {}
+      if (["partial", "perplexity_full", "image", "graph", "audio_pending", "audio_chunk", "audio_done", "error"].includes(data.type)) {
+        botResponded = true;
+      }
+
+      if (data.type === "partial") {
+        partialText = data.partial || "";
+        textDiv.innerHTML = partialText.replace(/\n/g, "<br>");
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      else if (data.type === "audio_pending") {
+        // start buffering a new sentence audio
+        audioStatus.textContent = "Speaking…";
+        audioStatus.style.display = "";
+        currentAudioChunks = [];
+      }
+      else if (data.type === "audio_chunk") {
+        audioStatus.style.display = "";
+        enqueueAudioChunk(data.chunk);
+        currentAudioChunks.push(data.chunk);
+      }
+      else if (data.type === "audio_done") {
+        audioStatus.textContent = "";
+        audioStatus.style.display = "none";
+      }
+      else if (data.type === "image") {
+        if (!imageDiv) {
+          imageDiv = document.createElement('div');
+          imageDiv.style.marginTop = "10px";
+          botBubble.appendChild(imageDiv);
+        }
+        imageDiv.innerHTML = `<img src="${data.url}" alt="Generated image" style="max-width:92%;border-radius:7px;border:1px solid #ddd;"><div style="margin-top:4px;font-size:0.97em;">${data.desc||''}</div>`;
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      else if (data.type === "graph") {
+        if (!graphDiv) {
+          graphDiv = document.createElement('div');
+          graphDiv.style.marginTop = "10px";
+          botBubble.appendChild(graphDiv);
+        }
+        graphDiv.innerHTML = `<img src="${data.url}" alt="Graph" style="max-width:92%;border-radius:7px;border:1px solid #ddd;"><div style="margin-top:4px;font-size:0.97em;">${data.desc||''}</div>`;
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      else if (data.type === "perplexity_full") {
+        // Show summary/explanation
+        if (!summaryBlock) {
+          summaryBlock = document.createElement('div');
+          summaryBlock.className = "summary-block";
+          botBubble.appendChild(summaryBlock);
+        }
+        summaryBlock.textContent = data.explanation || "";
+
+        // Show ONLY links under "links" section
+        if (!linksList) {
+          linksList = document.createElement('div');
+          linksList.className = "links-list";
+          botBubble.appendChild(linksList);
+        }
+        linksList.innerHTML = "";
+        (data.links || []).forEach(link => {
+          const a = document.createElement('a');
+          a.href = link.url || link;
+          a.target = "_blank";
+          a.textContent = link.title || link.url || link;
+          linksList.appendChild(a);
+        });
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      else if (data.type === "error") {
+        const errDiv = document.createElement('div');
+        errDiv.className = "error-msg";
+        errDiv.textContent = data.error || "Sorry, something went wrong.";
+        botBubble.appendChild(errDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+      else if (data.type === "done") {
+        audioStatus.textContent = "";
+        audioStatus.style.display = "none";
+        if (eventSource) eventSource.close();
+        textStreamingActive = false; // Unlock input
+      }
+    };
+
+    eventSource.onerror = function() {
+      audioStatus.textContent = "";
+      audioStatus.style.display = "none";
+      if (!botResponded) {
+        const errDiv = document.createElement('div');
+        errDiv.className = "error-msg";
+        errDiv.textContent = "Connection lost. Please try again.";
+        botBubble.appendChild(errDiv);
+      }
+      if (eventSource) eventSource.close();
+      textStreamingActive = false;
+    };
+
+    // Reset input
+    document.getElementById('queryInput').value = '';
+    chatBox.scrollTop = chatBox.scrollHeight;
+  };
+</script>
+</body>
+</html>
