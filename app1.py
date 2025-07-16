@@ -20,6 +20,7 @@ import httpx
 import aiohttp
 import pprint
 import asyncio
+from werkzeug.utils import secure_filename
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
 try:
@@ -629,24 +630,27 @@ image_idx = ImageIndex()
 @app.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     """Upload a PDF to the cloud OCR service and return the PDF URL."""
+    # Save PDF locally to serve as fallback if OCR fails
+    filename = file.filename or f"{uuid.uuid4()}.pdf"
+    local_path = os.path.join("uploads", secure_filename(filename))
+    content = await file.read()
+    with open(local_path, "wb") as f:
+        f.write(content)
+
     # Forward the uploaded PDF to the OCR service as multipart/form-data
     ocr_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr"
-    # Default to skipping OCR in the service (it will return the PDF URL)
     data = {"ocr": "false"}
-    content = await file.read()
-    files = {"file": (file.filename or f"{uuid.uuid4()}.pdf", content, "application/pdf")}
+    files = {"file": (filename, content, "application/pdf")}
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(ocr_url, data=data, files=files)
             resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = resp.text
-            raise HTTPException(
-                status_code=exc.response.status_code,
-                detail=f"OCR service error {exc.response.status_code}: {detail}"
-            )
-        result = resp.json()
-    return {"pdf_url": result.get("pdf_url")}
+            result = resp.json()
+            return {"pdf_url": result.get("pdf_url")}
+        except httpx.HTTPError:
+            # On any HTTP error, fallback to serving local file
+            url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+            return {"pdf_url": url}
 
 @app.post("/upload-image")
 async def upload_image(request: Request, file: UploadFile = File(...)):
@@ -654,19 +658,23 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     # Forward the uploaded image to the cloud upload service as multipart/form-data
     upload_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload/upload"
     content = await file.read()
-    files = {"file": (file.filename or f"{uuid.uuid4()}.png", content, file.content_type or "image/png")}
+    # Save image locally as fallback
+    filename = file.filename or f"{uuid.uuid4()}.png"
+    local_path = os.path.join("uploads", secure_filename(filename))
+    with open(local_path, "wb") as f:
+        f.write(content)
+
+    files = {"file": (filename, content, file.content_type or "image/png")}
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(upload_url, data={}, files=files)
             resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = resp.text
-            raise HTTPException(
-                status_code=exc.response.status_code,
-                detail=f"Image upload error {exc.response.status_code}: {detail}"
-            )
-        result = resp.json()
-    return {"url": result.get("url")}
+            result = resp.json()
+            return {"url": result.get("url")}
+        except httpx.HTTPError:
+            # On any HTTP error, fallback to serving local file
+            url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+            return {"url": url}
 
 @app.post("/upload-audio")
 async def upload_audio(
@@ -678,26 +686,24 @@ async def upload_audio(
     # Forward the uploaded audio file to the cloud speech-to-text service as multipart/form-data
     speech_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/speech_to_text/speech_to_text"
     content = await file.read()
-    files = {
-        "audio": (
-            file.filename or f"{uuid.uuid4()}.wav",
-            content,
-            file.content_type or "audio/wav"
-        )
-    }
+    # Save audio locally as fallback
+    filename = file.filename or f"{uuid.uuid4()}.wav"
+    local_path = os.path.join(AUDIO_DIR, filename)
+    with open(local_path, "wb") as f:
+        f.write(content)
+
+    files = {"audio": (filename, content, file.content_type or "audio/wav")}
     data = {"language": language}
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(speech_url, data=data, files=files)
             resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = resp.text
-            raise HTTPException(
-                status_code=exc.response.status_code,
-                detail=f"Audio upload error {exc.response.status_code}: {detail}"
-            )
-        result = resp.json()
-    return {"url": result.get("url")}
+            result = resp.json()
+            return {"url": result.get("url")}
+        except httpx.HTTPError:
+            # On any HTTP error, fallback to serving local audio
+            url = str(request.base_url).rstrip("/") + f"/audio/{filename}"
+            return {"url": url}
 
 
 async def generate_weblink_and_summary(prompt):
