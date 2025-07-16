@@ -35,6 +35,18 @@ from pathlib import Path
 import base64
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import boto3
+from botocore.exceptions import ClientError
+def get_firebase_secret_from_aws(secret_name, region_name):
+    """Fetch Firebase credentials JSON from AWS Secrets Manager."""
+    session = boto3.session.Session()
+    client = session.client(service_name='secretsmanager', region_name=region_name)
+    try:
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+    except ClientError as e:
+        raise RuntimeError(f"Error retrieving secret: {e}")
+    secret = get_secret_value_response['SecretString']
+    return json.loads(secret)
 
 # LangChain & FAISS imports for curriculum RAG
 from langchain_openai import OpenAIEmbeddings
@@ -55,8 +67,12 @@ if not firebase_admin._apps:
         print("[INFO] Loading Firebase credentials from FIREBASE_JSON environment variable.")
         cred = credentials.Certificate(json.loads(FIREBASE_JSON))
     else:
-        print("[INFO] Loading Firebase credentials from file.")
-        cred = credentials.Certificate("aischool-ba7c6-firebase-adminsdk-n8tjs-669d9da038.json")
+        # Fetch from AWS Secrets Manager
+        print("[INFO] Loading Firebase credentials from AWS Secrets Manager.")
+        secret_name = "firebase-service-account-json"    # The secret name you used
+        region_name = "ap-south-1"                       # Your AWS region
+        firebase_creds = get_firebase_secret_from_aws(secret_name, region_name)
+        cred = credentials.Certificate(firebase_creds)
     firebase_admin.initialize_app(cred, {"storageBucket": "aischool-ba7c6.appspot.com"})
 
 # Firestore & Storage clients
