@@ -630,24 +630,38 @@ image_idx = ImageIndex()
 @app.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     """Upload a PDF to the cloud OCR service and return the PDF URL."""
+    # Debug: Entered endpoint
+    print("[DEBUG] Entered /upload-file endpoint")
+    print(f"[DEBUG] Received file: {file.filename}, content_type: {file.content_type}")
     # Save PDF locally to serve as fallback if OCR fails
     filename = file.filename or f"{uuid.uuid4()}.pdf"
     local_path = os.path.join("uploads", secure_filename(filename))
     content = await file.read()
+    print(f"[DEBUG] Read file content, size: {len(content)} bytes")
+    print(f"[DEBUG] Saving uploaded file to local path: {local_path}")
     with open(local_path, "wb") as f:
         f.write(content)
 
     # Forward the uploaded PDF to the OCR service as multipart/form-data
     ocr_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr"
+    print(f"[DEBUG] Preparing to forward file to OCR: {ocr_url}")
     data = {"ocr": "false"}
     files = {"file": (filename, content, "application/pdf")}
     async with httpx.AsyncClient() as client:
         try:
+            print(f"[DEBUG] Forwarding file to OCR service: {ocr_url}")
+            print(f"[DEBUG] Data: {data}")
+            print(f"[DEBUG] Files dict keys: {list(files.keys())}, filename: {files['file'][0]}, content_type: {files['file'][2]}")
             resp = await client.post(ocr_url, data=data, files=files)
+            print(f"[DEBUG] OCR service response status: {resp.status_code}")
+            print(f"[DEBUG] OCR service response text: {resp.text[:500]}")
             resp.raise_for_status()
             result = resp.json()
             return {"pdf_url": result.get("pdf_url")}
         except httpx.HTTPError:
+            import traceback
+            print("[ERROR] Exception during OCR upload:")
+            traceback.print_exc()
             # On any HTTP error, fallback to serving local file
             url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
             return {"pdf_url": url}
@@ -724,6 +738,7 @@ async def stream_answer(
     grade: str = Query(...),
     curriculum: str = Query(...),
     language: str = Query(...),
+    subject: str = Query(None),
     question: str = Query(...),
     chat_id: str = Query(...),
     activity: str = Query(...),
@@ -745,6 +760,7 @@ async def stream_answer(
             "grade": grade,
             "curriculum": curriculum,
             "language": language,
+            "subject": subject,
             "question": question,
             "activity": activity,
             "image_provided": image_provided,
