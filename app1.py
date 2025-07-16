@@ -4,7 +4,7 @@ import re
 import json
 import string
 import random
-from fastapi import FastAPI, UploadFile, File, Request, Query
+from fastapi import FastAPI, UploadFile, File, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sentence_transformers import SentenceTransformer
@@ -640,7 +640,14 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr",
             json=payload,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = resp.text
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail=f"OCR service error {exc.response.status_code}: {detail}"
+            )
         data = resp.json()
     return {"pdf_url": data.get("pdf_url")}
 
@@ -659,7 +666,14 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
             "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload/upload",
             json=payload,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = resp.text
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail=f"Image upload error {exc.response.status_code}: {detail}"
+            )
         data = resp.json()
     return {"url": data.get("url")}
 
@@ -682,7 +696,14 @@ async def upload_audio(
             "https://us-central1-aischool-ba7c6.cloudfunctions.net/speech_to_text/speech_to_text",
             json=payload,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = resp.text
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail=f"Audio upload error {exc.response.status_code}: {detail}"
+            )
         data = resp.json()
     return {"url": data.get("url")}
 
@@ -707,6 +728,7 @@ async def stream_answer(
     language: str = Query(...),
     question: str = Query(...),
     chat_id: str = Query(...),
+    activity: str = Query(...),
     file_url: str = Query(None),
     image_url: str = Query(None),
     audio_url: str = Query(None),
@@ -726,6 +748,7 @@ async def stream_answer(
             "curriculum": curriculum,
             "language": language,
             "question": question,
+            "activity": activity,
             "image_provided": image_provided,
             "pdf_provided": pdf_provided,
             "audio_provided": audio_provided,
