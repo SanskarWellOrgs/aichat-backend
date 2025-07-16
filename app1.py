@@ -629,18 +629,15 @@ image_idx = ImageIndex()
 @app.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     """Upload a PDF to the cloud OCR service and return the PDF URL."""
-    filename = f"{uuid.uuid4()}.pdf"
-    file_path = os.path.join("uploads", filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-    file_url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+    # Forward the uploaded PDF to the OCR service as multipart/form-data
+    ocr_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr"
+    # Default to skipping OCR in the service (it will return the PDF URL)
+    data = {"ocr": "false"}
+    content = await file.read()
+    files = {"file": (file.filename or f"{uuid.uuid4()}.pdf", content, "application/pdf")}
     async with httpx.AsyncClient() as client:
-        payload = {"ocr": False, "file": file_url}
-        resp = await client.post(
-            "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr",
-            json=payload,
-        )
         try:
+            resp = await client.post(ocr_url, data=data, files=files)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = resp.text
@@ -648,25 +645,19 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                 status_code=exc.response.status_code,
                 detail=f"OCR service error {exc.response.status_code}: {detail}"
             )
-        data = resp.json()
-    return {"pdf_url": data.get("pdf_url")}
+        result = resp.json()
+    return {"pdf_url": result.get("pdf_url")}
 
 @app.post("/upload-image")
 async def upload_image(request: Request, file: UploadFile = File(...)):
     """Upload an image to the cloud upload service and return the image URL."""
-    ext = os.path.splitext(file.filename)[1] or ".png"
-    filename = f"{uuid.uuid4()}{ext}"
-    file_path = os.path.join("uploads", filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-    file_url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
+    # Forward the uploaded image to the cloud upload service as multipart/form-data
+    upload_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload/upload"
+    content = await file.read()
+    files = {"file": (file.filename or f"{uuid.uuid4()}.png", content, file.content_type or "image/png")}
     async with httpx.AsyncClient() as client:
-        payload = {"file": file_url}
-        resp = await client.post(
-            "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload/upload",
-            json=payload,
-        )
         try:
+            resp = await client.post(upload_url, data={}, files=files)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = resp.text
@@ -674,8 +665,8 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
                 status_code=exc.response.status_code,
                 detail=f"Image upload error {exc.response.status_code}: {detail}"
             )
-        data = resp.json()
-    return {"url": data.get("url")}
+        result = resp.json()
+    return {"url": result.get("url")}
 
 @app.post("/upload-audio")
 async def upload_audio(
@@ -684,19 +675,20 @@ async def upload_audio(
     language: str = Query(...),
 ):
     """Upload an audio file to the cloud speech-to-text service and return the transcript URL."""
-    ext = os.path.splitext(file.filename)[1] or ".wav"
-    filename = f"{uuid.uuid4()}{ext}"
-    file_path = os.path.join(AUDIO_DIR, filename)
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-    audio_url = str(request.base_url).rstrip("/") + f"/audio/{filename}"
-    async with httpx.AsyncClient() as client:
-        payload = {"audio": audio_url, "language": language}
-        resp = await client.post(
-            "https://us-central1-aischool-ba7c6.cloudfunctions.net/speech_to_text/speech_to_text",
-            json=payload,
+    # Forward the uploaded audio file to the cloud speech-to-text service as multipart/form-data
+    speech_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/speech_to_text/speech_to_text"
+    content = await file.read()
+    files = {
+        "audio": (
+            file.filename or f"{uuid.uuid4()}.wav",
+            content,
+            file.content_type or "audio/wav"
         )
+    }
+    data = {"language": language}
+    async with httpx.AsyncClient() as client:
         try:
+            resp = await client.post(speech_url, data=data, files=files)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = resp.text
@@ -704,8 +696,8 @@ async def upload_audio(
                 status_code=exc.response.status_code,
                 detail=f"Audio upload error {exc.response.status_code}: {detail}"
             )
-        data = resp.json()
-    return {"url": data.get("url")}
+        result = resp.json()
+    return {"url": result.get("url")}
 
 
 async def generate_weblink_and_summary(prompt):
