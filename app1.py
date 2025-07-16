@@ -192,7 +192,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
             FAISS.load_local,
             idx_dir,
             OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
-            True,
+            allow_dangerous_deserialization=True,
         )
     else:
         vectors = await vector_embedding(curriculum, pdf_url)
