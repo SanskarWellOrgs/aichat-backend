@@ -56,7 +56,7 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(json.loads(FIREBASE_JSON))
     else:
         print("[INFO] Loading Firebase credentials from file.")
-        cred = credentials.Certificate("aischool-ba7c6-firebase-adminsdk-n8tjs-59b0bf7672.json")
+        cred = credentials.Certificate("aischool-ba7c6-firebase-adminsdk-n8tjs-669d9da038.json")
     firebase_admin.initialize_app(cred, {"storageBucket": "aischool-ba7c6.appspot.com"})
 
 # Firestore & Storage clients
