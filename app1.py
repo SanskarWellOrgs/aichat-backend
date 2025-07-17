@@ -52,7 +52,7 @@ def get_firebase_secret_from_aws(secret_name, region_name):
 # LangChain & FAISS imports for curriculum RAG
 from langchain_openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredImageLoader
 from langchain_community.vectorstores import FAISS
 
 # Initialize logging
@@ -173,7 +173,14 @@ async def vector_embedding(curriculum, file_url):
         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
     file_path = await download_file(file_url, curriculum)
     ext = Path(file_path).suffix.lower()
-    loader = PyPDFLoader(file_path) if ext == '.pdf' else Docx2txtLoader(file_path)
+    if ext == '.pdf':
+        loader = PyPDFLoader(file_path)
+    elif ext in ('.doc', '.docx'):
+        loader = Docx2txtLoader(file_path)
+    elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
+        loader = UnstructuredImageLoader(file_path)
+    else:
+        raise ValueError(f"Unsupported file type for RAG: {ext}")
     docs = loader.load()
     splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
     final_docs = splitter.split_documents(docs)
@@ -678,32 +685,31 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
 @app.post("/upload-audio")
 async def upload_audio(
-    request: Request,
     file: UploadFile = File(...),
     language: str = Query(...),
 ):
-    """Upload an audio file to the cloud speech-to-text service and return the transcript URL."""
-    # Forward the uploaded audio file to the cloud speech-to-text service as multipart/form-data
-    speech_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/speech_to_text/speech_to_text"
+    """Save an uploaded audio file, transcribe via Whisper, and return the transcript."""
     content = await file.read()
-    # Save audio locally as fallback
     filename = file.filename or f"{uuid.uuid4()}.wav"
-    local_path = os.path.join(AUDIO_DIR, filename)
+    local_path = os.path.join(AUDIO_DIR, secure_filename(filename))
     with open(local_path, "wb") as f:
         f.write(content)
 
-    files = {"audio": (filename, content, file.content_type or "audio/wav")}
-    data = {"language": language}
-    async with httpx.AsyncClient() as client:
+    try:
+        with open(local_path, "rb") as af:
+            result = openai.Audio.transcribe(
+                model="whisper-1",
+                file=af,
+                language=language or None,
+            )
+        question = result.get("text", "").strip()
+    finally:
         try:
-            resp = await client.post(speech_url, data=data, files=files)
-            resp.raise_for_status()
-            result = resp.json()
-            return {"url": result.get("url")}
-        except httpx.HTTPError:
-            # On any HTTP error, fallback to serving local audio
-            url = str(request.base_url).rstrip("/") + f"/audio/{filename}"
-            return {"url": url}
+            os.remove(local_path)
+        except OSError:
+            pass
+
+    return {"question": question, "language": language}
 
 
 async def generate_weblink_and_summary(prompt):
@@ -738,52 +744,51 @@ async def stream_answer(
     image_provided = bool(image_url)
     audio_provided = bool(audio_url)
 
-    # If the user has uploaded a file, image or audio, delegate to the appropriate remote RAG function
-    if pdf_provided or image_provided or audio_provided:
-        payload = {
-            "role": role,
-            "user_id": user_id,
-            "grade": grade,
-            "curriculum": curriculum,
-            "language": language,
-            "subject": subject,
-            "question": question,
-            "activity": activity,
-            "image_provided": image_provided,
-            "pdf_provided": pdf_provided,
-            "audio_provided": audio_provided,
-            "audio_url": audio_url,
-            "chat_id": chat_id,
-        }
-        # Choose cloud function based on input type
-        endpoint = (
-            "https://us-central1-aischool-ba7c6.cloudfunctions.net/rag_speech_response/rag_speech_response"
-            if audio_provided
-            else "https://us-central1-aischool-ba7c6.cloudfunctions.net/rag_text_response_image/rag_text_response_image"
-        )
-        async with httpx.AsyncClient() as client:
-            remote = await client.stream(
-                "POST",
-                endpoint,
-                json=payload,
-                headers={"Accept": "text/event-stream"},
-            )
-            return StreamingResponse(remote.aiter_text(), media_type="text/event-stream")
+    if pdf_provided:
+        formatted_history = await get_chat_history(chat_id)
+        vectors = await get_or_load_vectors(curriculum, file_url)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+    elif image_provided:
+        formatted_history = await get_chat_history(chat_id)
+        vectors = await get_or_load_vectors(curriculum, image_url)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+    elif audio_provided:
+        # Perform speech-to-text via Whisper, then local RAG on the transcript
+        audio_path = await download_file(audio_url, curriculum)
+        try:
+            with open(audio_path, "rb") as af:
+                result = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=af,
+                    language=language or None
+                )
+            question = result.get("text", "").strip()
+        finally:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+        formatted_history = await get_chat_history(chat_id)
+        pdf_src = await get_curriculum_url(curriculum)
+        vectors = await get_or_load_vectors(curriculum, pdf_src)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+    else:
+        formatted_history = await get_chat_history(chat_id)
 
-    # No upload: fetch prior chat history for curriculum RAG
-    formatted_history = await get_chat_history(chat_id)
-
-    # Fall back to the curriculum FAISS index
-    pdf_src = await get_curriculum_url(curriculum)
-    vectors = await get_or_load_vectors(curriculum, pdf_src)
-    docs = await retrieve_documents(vectors, question)
-    context = "\n\n".join(doc.page_content for doc in docs)
+        pdf_src = await get_curriculum_url(curriculum)
+        vectors = await get_or_load_vectors(curriculum, pdf_src)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
 
     norm_question = question.strip().lower()
     is_teacher = (role or "").strip().lower() == "teacher"
 
 
 
+    # Wrapper to apply our cumulative clean+buffer logic to 'partial' SSE events
     # Prepend initial SSE event carrying the image/pdf flags
     async def prepend_init(stream):
         yield f"data: {json.dumps({'type':'init','image_provided': image_provided, 'pdf_provided': pdf_provided})}\n\n"
@@ -947,9 +952,18 @@ async def stream_answer(
                                 print("[TTS DEBUG] Sending this to edge-tts:", repr(clean_sent), "Voice:", tts_voice)
                                 yield f"data: {json.dumps({'type':'audio_pending','sentence': sent})}\n\n"
                                 communicate_stream = edge_tts.Communicate(clean_sent, voice=tts_voice)
+                                last_chunk = None
                                 async for chunk in communicate_stream.stream():
                                     if chunk['type'] == 'audio':
-                                        yield f"data: {json.dumps({'type':'audio_chunk','sentence': sent, 'chunk': chunk['data'].hex()})}\n\n"
+                                        data = chunk['data']
+                                        # drop pure-silence and duplicate frames
+                                        if all(b == 0xAA for b in data):
+                                            continue
+                                        hexstr = data.hex()
+                                        if hexstr == last_chunk:
+                                            continue
+                                        last_chunk = hexstr
+                                        yield f"data: {json.dumps({'type':'audio_chunk','sentence': sent, 'chunk': hexstr})}\n\n"
                                 yield f"data: {json.dumps({'type':'audio_done','sentence': sent})}\n\n"
                     except Exception as e:
                         yield f"data: {json.dumps({'type': 'error', 'data': 'Perplexity API error: ' + str(e)})}\n\n"
@@ -2014,10 +2028,19 @@ Use it **properly for follow-up answers based on contex**.
                     return
                 print("[TTS DEBUG] Sending this to edge-tts:", repr(clean_sentence), "Voice:", tts_voice)
                 communicate_stream = edge_tts.Communicate(clean_sentence, voice=tts_voice)
+                last_chunk = None
                 yield f"data: {json.dumps({'type':'audio_pending','sentence': sentence})}\n\n"
                 async for chunk in communicate_stream.stream():
                     if chunk["type"] == "audio":
-                        yield f"data: {json.dumps({'type':'audio_chunk','sentence': sentence, 'chunk': chunk['data'].hex()})}\n\n"
+                        data = chunk['data']
+                        # drop pure-silence and duplicate frames
+                        if all(b == 0xAA for b in data):
+                            continue
+                        hexstr = data.hex()
+                        if hexstr == last_chunk:
+                            continue
+                        last_chunk = hexstr
+                        yield f"data: {json.dumps({'type':'audio_chunk','sentence': sentence, 'chunk': hexstr})}\n\n"
                 yield f"data: {json.dumps({'type':'audio_done','sentence': sentence})}\n\n"
             except Exception as e:
                 print("[ERROR] TTS failed:", sentence, str(e))
@@ -2038,10 +2061,9 @@ Use it **properly for follow-up answers based on contex**.
                 buffer += content
                 answer_so_far += content
 
-                # Send updated partial text to frontend
-                cleaned = latex_frac_to_stacked(answer_so_far)
-                cleaned = remove_latex(cleaned)
-                yield f"data: {json.dumps({'type':'partial','partial': cleaned})}\n\n"
+                # Send only the latest chunk to frontend
+                delta_cleaned = remove_latex(latex_frac_to_stacked(content))
+                yield f"data: {json.dumps({'type':'partial','partial': delta_cleaned})}\n\n"
 
                 # Flush full sentences for TTS as soon as they complete
                 last = 0
@@ -2068,6 +2090,7 @@ Use it **properly for follow-up answers based on contex**.
         except Exception as ex:
             print("[FATAL ERROR in event_stream]", str(ex))
 
+    # Prepend init event and return raw event_stream (no cumulative buffering)
     return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
 
 @app.get("/")
