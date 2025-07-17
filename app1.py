@@ -16,7 +16,6 @@ from PyPDF2 import PdfReader
 import tiktoken
 from runware import Runware, IImageInference
 import urllib.parse
-import httpx
 import aiohttp
 import pprint
 import asyncio
@@ -324,6 +323,8 @@ app.mount("/graphs", StaticFiles(directory=GRAPHS_DIR), name="graphs")
 # --- Uploads directory setup and static mount for serving user-uploaded files ---
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Base URL where uploaded files (PDF, image, audio) will be served
+UPLOADS_BASE_URL = "http://51.20.81.94:8000/uploads"
 def generate_matplotlib_graph(prompt):
     """
     Tries to extract a function or equation from the prompt, plots it with matplotlib,
@@ -636,80 +637,60 @@ image_idx = ImageIndex()
 
 @app.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    """Upload a PDF to the cloud OCR service and return the PDF URL."""
-    # Save PDF locally to serve as fallback if OCR fails
+    """
+    Save uploaded PDF and return its static URL.
+    Uploaded files are served from:
+      http://51.20.81.94:8000/uploads/{filename}.pdf
+    where {filename} is the actual filename of the uploaded PDF.
+    """
     filename = file.filename or f"{uuid.uuid4()}.pdf"
     local_path = os.path.join("uploads", secure_filename(filename))
     content = await file.read()
     with open(local_path, "wb") as f:
         f.write(content)
-
-    # Forward the uploaded PDF to the OCR service as multipart/form-data
-    ocr_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload_pdf/pdf_ocr"
-    data = {"ocr": "false"}
-    files = {"file": (filename, content, "application/pdf")}
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(ocr_url, data=data, files=files)
-            resp.raise_for_status()
-            result = resp.json()
-            return {"pdf_url": result.get("pdf_url")}
-        except httpx.HTTPError:
-            # On any HTTP error, fallback to serving local file
-            url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
-            return {"pdf_url": url}
+    url = f"{UPLOADS_BASE_URL}/{filename}"
+    return {
+        "pdf_url": url,
+        "message": f"Uploaded PDF is served at {url}"
+    }
 
 @app.post("/upload-image")
 async def upload_image(request: Request, file: UploadFile = File(...)):
-    """Upload an image to the cloud upload service and return the image URL."""
-    # Forward the uploaded image to the cloud upload service as multipart/form-data
-    upload_url = "https://us-central1-aischool-ba7c6.cloudfunctions.net/upload/upload"
-    content = await file.read()
-    # Save image locally as fallback
+    """
+    Save uploaded image and return its static URL.
+    Uploaded files are served from:
+      http://51.20.81.94:8000/uploads/{filename}.png
+    where {filename} is the actual filename of the uploaded image.
+    """
     filename = file.filename or f"{uuid.uuid4()}.png"
     local_path = os.path.join("uploads", secure_filename(filename))
+    content = await file.read()
     with open(local_path, "wb") as f:
         f.write(content)
-
-    files = {"file": (filename, content, file.content_type or "image/png")}
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(upload_url, data={}, files=files)
-            resp.raise_for_status()
-            result = resp.json()
-            return {"url": result.get("url")}
-        except httpx.HTTPError:
-            # On any HTTP error, fallback to serving local file
-            url = str(request.base_url).rstrip("/") + f"/uploads/{filename}"
-            return {"url": url}
+    url = f"{UPLOADS_BASE_URL}/{filename}"
+    return {
+        "url": url,
+        "message": f"Uploaded image is served at {url}"
+    }
 
 @app.post("/upload-audio")
-async def upload_audio(
-    file: UploadFile = File(...),
-    language: str = Query(...),
-):
-    """Save an uploaded audio file, transcribe via Whisper, and return the transcript."""
-    content = await file.read()
+async def upload_audio(request: Request, file: UploadFile = File(...)):
+    """
+    Save uploaded audio and return its static URL.
+    Uploaded files are served from:
+      http://51.20.81.94:8000/uploads/{filename}.wav
+    where {filename} is the actual filename of the uploaded audio.
+    """
     filename = file.filename or f"{uuid.uuid4()}.wav"
-    local_path = os.path.join(AUDIO_DIR, secure_filename(filename))
+    local_path = os.path.join("uploads", secure_filename(filename))
+    content = await file.read()
     with open(local_path, "wb") as f:
         f.write(content)
-
-    try:
-        with open(local_path, "rb") as af:
-            result = openai.Audio.transcribe(
-                model="whisper-1",
-                file=af,
-                language=language or None,
-            )
-        question = result.get("text", "").strip()
-    finally:
-        try:
-            os.remove(local_path)
-        except OSError:
-            pass
-
-    return {"question": question, "language": language}
+    url = f"{UPLOADS_BASE_URL}/{filename}"
+    return {
+        "audio_url": url,
+        "message": f"Uploaded audio is served at {url}"
+    }
 
 
 async def generate_weblink_and_summary(prompt):
@@ -738,7 +719,16 @@ async def stream_answer(
     image_url: str = Query(None),
     audio_url: str = Query(None),
 ):
-    """Stream an answer, delegating to cloud RAG for uploaded files/images."""
+    """
+    Stream an answer, delegating to cloud RAG for uploaded files/images and Whisper transcription for audio.
+
+    Uploaded assets must be at:
+      http://51.20.81.94:8000/uploads/<filename>.pdf,
+      http://51.20.81.94:8000/uploads/<filename>.png,
+      or http://51.20.81.94:8000/uploads/<filename>.wav.
+    Audio uploads will be fetched from that URL, transcribed to text by Whisper,
+    and the transcript used as the question for the model.
+    """
     # Derive flags for PDF/image/audio uploads
     pdf_provided = bool(file_url)
     image_provided = bool(image_url)
