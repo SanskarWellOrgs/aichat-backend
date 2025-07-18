@@ -833,6 +833,7 @@ async def stream_answer(
                 return StreamingResponse(fail_stream(), media_type="text/event-stream")
             async def event_stream():
                 yield f"data: {json.dumps({'type': 'image', 'url': img_url, 'desc': prompt_desc or 'Generated.'})}\n\n"
+                yield f"data: {json.dumps({'type':'done'})}\n\n"
             return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
 
         # ---- GRAPH GENERATION (Block out-of-context for ALL) ----
@@ -846,6 +847,7 @@ async def stream_answer(
             url = generate_matplotlib_graph(prompt_desc)
             async def event_stream():
                 yield f"data: {json.dumps({'type': 'graph', 'url': url, 'desc': prompt_desc or 'Generated graph.'})}\n\n"
+                yield f"data: {json.dumps({'type':'done'})}\n\n"
             return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
 
         # ---- PERPLEXITY WEBLINK ----
@@ -899,23 +901,16 @@ async def stream_answer(
                         # Parse the assistant's JSON content to extract explanation and links
                         links = []
                         explanation = None
-                        # Always capture the raw assistant message as explanation, then strip any code-fenced JSON and parse if structured
                         msg_content = data['choices'][0]['message']['content']
-                        # Remove any trailing code-fenced JSON block (``` ... ```)
                         raw_expl = msg_content.split('```')[0].strip()
                         explanation = raw_expl
                         try:
                             parsed = json.loads(msg_content)
-                            # Use structured explanation if present
                             explanation = parsed.get('explanation', explanation)
                             links = parsed.get('links', [])
                         except Exception:
-                            # Fallback: extract links from Perplexity fields if available
                             if data.get('search_results'):
-                                links = [
-                                    {'title': r.get('title', ''), 'url': r.get('url', '')}
-                                    for r in data.get('search_results', [])
-                                ]
+                                links = [{'title': r.get('title', ''), 'url': r.get('url', '')} for r in data.get('search_results', [])]
                             elif data.get('citations'):
                                 links = [{'title': '', 'url': u} for u in data.get('citations', [])]
                         # Send structural Perplexity response to the frontend
@@ -929,24 +924,19 @@ async def stream_answer(
                             if summary:
                                 text_to_read += ' ' + summary
                         if text_to_read:
-                            # Debug log for weblink TTS activation
                             print("[WEBLINK TTS] text_to_read:", repr(text_to_read))
-                            # Stream TTS sentence by sentence (like general chat) for continuous playback
                             for sent in re.split(r'(?<=[\.\!\؟\?])\s+', text_to_read):
                                 sent = sent.strip()
-                                print("[WEBLINK TTS] sentence:", repr(sent))
                                 if not sent:
                                     continue
                                 processed = latex_frac_to_stacked(sent)
                                 clean_sent = sanitize_for_tts(processed)
-                                print("[TTS DEBUG] Sending this to edge-tts:", repr(clean_sent), "Voice:", tts_voice)
                                 yield f"data: {json.dumps({'type':'audio_pending','sentence': sent})}\n\n"
                                 communicate_stream = edge_tts.Communicate(clean_sent, voice=tts_voice)
                                 last_chunk = None
                                 async for chunk in communicate_stream.stream():
                                     if chunk['type'] == 'audio':
                                         data = chunk['data']
-                                        # drop pure-silence and duplicate frames
                                         if all(b == 0xAA for b in data):
                                             continue
                                         hexstr = data.hex()
@@ -957,6 +947,7 @@ async def stream_answer(
                                 yield f"data: {json.dumps({'type':'audio_done','sentence': sent})}\n\n"
                     except Exception as e:
                         yield f"data: {json.dumps({'type': 'error', 'data': 'Perplexity API error: ' + str(e)})}\n\n"
+                yield f"data: {json.dumps({'type':'done'})}\n\n"
             return StreamingResponse(prepend_init(perplexity_stream()), media_type="text/event-stream")
 
 
@@ -2079,6 +2070,9 @@ Use it **properly for follow-up answers based on contex**.
                 print("[ERROR] Failed to update chat history:", str(e))
         except Exception as ex:
             print("[FATAL ERROR in event_stream]", str(ex))
+            # In case of fatal errors, propagate an error event before completing
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Streaming failure: ' + str(ex)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     # Prepend init event and return raw event_stream (no cumulative buffering)
     return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
