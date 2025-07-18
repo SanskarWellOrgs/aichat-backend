@@ -38,7 +38,7 @@ except ImportError as e:
     ) from e
 import shutil
 import time
-from pathlib import Path
+from pathlib import Path as FilePath
 import base64
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -138,7 +138,7 @@ async def check_index_in_bucket(curriculum):
     return blob.exists()
 
 async def download_index_from_bucket(curriculum):
-    dest = Path(f'faiss/faiss_index_{curriculum}')
+    dest = FilePath(f'faiss/faiss_index_{curriculum}')
     dest.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(
         bucket.blob(f'users/KnowledgeBase/faiss_index_{curriculum}/index.faiss').download_to_filename,
@@ -178,7 +178,7 @@ async def vector_embedding(curriculum, file_url):
         await download_index_from_bucket(curriculum)
         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
     file_path = await download_file(file_url, curriculum)
-    ext = Path(file_path).suffix.lower()
+    ext = FilePath(file_path).suffix.lower()
     if ext == '.pdf':
         loader = PyPDFLoader(file_path)
     elif ext in ('.doc', '.docx'):
