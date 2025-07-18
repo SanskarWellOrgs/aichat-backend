@@ -17,6 +17,7 @@ import tiktoken
 from runware import Runware, IImageInference
 import urllib.parse
 import aiohttp
+import httpx
 import pprint
 import asyncio
 from werkzeug.utils import secure_filename
