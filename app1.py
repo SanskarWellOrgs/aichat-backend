@@ -401,6 +401,7 @@ def generate_matplotlib_graph(prompt):
         'sinh': np.sinh,
         'cosh': np.cosh,
         'tanh': np.tanh,
+        # You can add more as needed
     }
     y = None
     try:
@@ -739,8 +740,9 @@ async def stream_answer(
       http://51.20.81.94:8000/uploads/<filename>.pdf,
       http://51.20.81.94:8000/uploads/<filename>.png,
       or http://51.20.81.94:8000/uploads/<filename>.wav.
-    Audio uploads will be fetched from that URL, transcribed to text by Whisper,
-    and the transcript used as the question for the model.
+    Audio uploads will be fetched from that URL and transcribed to text by Whisper
+    (the `language` query parameter must be an ISO-639-1 code, e.g. "en" or "ar"; any other value will auto-detect),
+    then the transcript is used as the question for the model.
     """
     # Derive flags for PDF/image/audio uploads
     pdf_provided = bool(file_url)
@@ -762,11 +764,20 @@ async def stream_answer(
         audio_path = await download_file(audio_url, curriculum)
         try:
             with open(audio_path, "rb") as af:
+                # Normalize language to ISO-639-1 for Whisper or auto-detect
+                lang_lower = (language or "").strip().lower()
+                if lang_lower.startswith("ar"):
+                    whisper_lang = "ar"
+                elif lang_lower.startswith("en"):
+                    whisper_lang = "en"
+                else:
+                    whisper_lang = None
+
                 # Transcribe audio using OpenAI v1 interface
                 result = openai.audio.transcriptions.create(
                     file=af,
                     model="whisper-1",
-                    language=language or None
+                    language=whisper_lang
                 )
             question = result.get("text", "").strip()
         finally:
@@ -1950,6 +1961,7 @@ Use it **properly for follow-up answers based on contex**.
 
 """
 
+    # You can add logic for language here as well if needed
 
     prompt_header = ""
     if (role or "").strip().lower() == "teacher":
