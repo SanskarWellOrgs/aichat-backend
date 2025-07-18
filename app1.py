@@ -16,8 +16,8 @@ from PyPDF2 import PdfReader
 import tiktoken
 from runware import Runware, IImageInference
 import urllib.parse
-import aiohttp
 import httpx
+import aiohttp
 import pprint
 import asyncio
 from werkzeug.utils import secure_filename
@@ -326,6 +326,8 @@ os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Base URL where uploaded files (PDF, image, audio) will be served
 UPLOADS_BASE_URL = "http://51.20.81.94:8000/uploads"
+# Base URL where generated graphs will be served
+GRAPHS_BASE_URL = "http://51.20.81.94:8000/graphs"
 def generate_matplotlib_graph(prompt):
     """
     Tries to extract a function or equation from the prompt, plots it with matplotlib,
@@ -418,9 +420,8 @@ def generate_matplotlib_graph(prompt):
     plt.savefig(fpath)
     plt.close(fig)
 
-    # URL to serve
-    url = f"/graphs/{fname}"
-    return url
+    # URL to serve (absolute)
+    return f"{GRAPHS_BASE_URL}/{fname}"
 
 def remove_emojis(text):
     # This regex removes almost all emojis and pictographs
@@ -847,7 +848,8 @@ async def stream_answer(
             # --- GRAPH GENERATION: use Matplotlib, not Runware ---
             url = generate_matplotlib_graph(prompt_desc)
             async def event_stream():
-                yield f"data: {json.dumps({'type': 'graph', 'url': url, 'desc': prompt_desc or 'Generated graph.'})}\n\n"
+                yield f"data: {json.dumps({'type': 'graph', 'url': url})}\n\n"
+
                 yield f"data: {json.dumps({'type':'done'})}\n\n"
             return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
 
