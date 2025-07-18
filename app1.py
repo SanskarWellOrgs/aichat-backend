@@ -21,6 +21,8 @@ import aiohttp
 import pprint
 import asyncio
 from werkzeug.utils import secure_filename
+from PIL import Image
+import pytesseract
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -399,7 +401,6 @@ def generate_matplotlib_graph(prompt):
         'sinh': np.sinh,
         'cosh': np.cosh,
         'tanh': np.tanh,
-        # You can add more as needed
     }
     y = None
     try:
@@ -619,9 +620,13 @@ class PDFIndex:
 pdf_idx = PDFIndex()
 
 def extract_text_from_image(file_path: str) -> str:
-    """Extract or describe text from an uploaded image (OCR or vision inference)."""
-    # TODO: implement OCR or vision-model inference to extract descriptive text from image
-    return ""
+    """Use OCR to extract text from the uploaded image file."""
+    try:
+        img = Image.open(file_path)
+        text = pytesseract.image_to_string(img)
+        return text.strip() or "No text detected in image."
+    except Exception as e:
+        return f"OCR error: {e}"
 
 class ImageIndex:
     def __init__(self):
@@ -757,9 +762,10 @@ async def stream_answer(
         audio_path = await download_file(audio_url, curriculum)
         try:
             with open(audio_path, "rb") as af:
-                result = openai.Audio.transcribe(
-                    model="whisper-1",
+                # Transcribe audio using OpenAI v1 interface
+                result = openai.audio.transcriptions.create(
                     file=af,
+                    model="whisper-1",
                     language=language or None
                 )
             question = result.get("text", "").strip()
@@ -1944,7 +1950,6 @@ Use it **properly for follow-up answers based on contex**.
 
 """
 
-    # You can add logic for language here as well if needed
 
     prompt_header = ""
     if (role or "").strip().lower() == "teacher":
