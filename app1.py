@@ -779,8 +779,8 @@ async def stream_answer(
                     model="whisper-1",
                     language=whisper_lang
                 )
-        # result is a Transcription Pydantic model; use its .text attribute
-        question = result.text.strip()
+            # result is a Transcription Pydantic model; use its .text attribute
+            question = result.text.strip()
         finally:
             try:
                 os.remove(audio_path)
