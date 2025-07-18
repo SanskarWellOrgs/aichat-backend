@@ -21,6 +21,12 @@ import aiohttp
 import pprint
 import asyncio
 from werkzeug.utils import secure_filename
+from fastapi import FastAPI, HTTPException, Path
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Literal
+from google.cloud import firestore
+
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
 try:
@@ -2079,6 +2085,90 @@ Use it **properly for follow-up answers based on contex**.
 
     # Prepend init event and return raw event_stream (no cumulative buffering)
     return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
+
+# ----------- Request Body Schema -----------
+
+class ChatHistoryEntry(BaseModel):
+    type: Literal["ar", "avatar", "normal"]
+    chat_id: str
+    id: str
+    role: str
+    content: str
+    audiourl: str
+    imageselected: str
+
+
+# ----------- GET Endpoints -----------
+
+@app.get("/api/chat-detail/{doc_id}")
+async def get_chat_detail(doc_id: str = Path(...)):
+    doc_ref = db.collection("chat_detail").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        return JSONResponse(content=data)
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/api/chat-detail-ar/{doc_id}")
+async def get_chat_detail_ar(doc_id: str = Path(...)):
+    doc_ref = db.collection("chat_details_ar").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        return JSONResponse(content=data)
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/api/avatarchatdetails/{doc_id}")
+async def get_chat_detail_avatar(doc_id: str = Path(...)):
+    doc_ref = db.collection("avatarchatdetails").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        return JSONResponse(content=data)
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+# ----------- POST Endpoint -----------
+
+@app.post("/api/chat-detail-store")
+async def add_chat_history(entry: ChatHistoryEntry):
+    type_mapping = {
+        "ar": "chat_details_ar",
+        "avatar": "avatarchatdetails",
+        "normal": "chat_detail",
+    }
+
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail="Invalid type value")
+
+    new_entry = {
+        "id": entry.id,
+        "role": entry.role,
+        "content": entry.content,
+        "audiourl": entry.audiourl,
+        "imageselected": entry.imageselected,
+    }
+
+    doc_ref = db.collection(collection_name).document(entry.chat_id)
+
+    try:
+        doc_ref.update({"history": firestore.ArrayUnion([new_entry])})
+        return {"message": f"Entry added to {collection_name} successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/")
 def root():
