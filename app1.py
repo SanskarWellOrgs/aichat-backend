@@ -579,13 +579,15 @@ async def vision_caption_openai(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
     img_b64 = base64.b64encode(buf.getvalue()).decode()
-    user_msg = (
-        "Describe this image in detail. "
-        f"data:image/jpeg;base64,{img_b64}"
-    )
+    messages = [
+        {"role": "user", "content": [
+            {"type": "text",      "text": "Describe this image in detail."},
+            {"type": "image_url", "image_url": f"data:image/jpeg;base64,{img_b64}"}
+        ]}
+    ]
     resp = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": user_msg}],
+        messages=messages,
         max_tokens=256,
         temperature=0.5
     )
