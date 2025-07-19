@@ -688,23 +688,36 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     }
 
 @app.post("/upload-audio")
-async def upload_audio(request: Request, file: UploadFile = File(...)):
+async def upload_audio(request: Request, file: UploadFile = File(...), language: str = Query(None)):
     """
-    Save uploaded audio and return its static URL.
-    Uploaded files are served from:
-      http://51.20.81.94:8000/uploads/{filename}.wav
-    where {filename} is the actual filename of the uploaded audio.
+    Save uploaded audio, transcribe using Whisper, and return the transcription text.
     """
     filename = file.filename or f"{uuid.uuid4()}.wav"
     local_path = os.path.join("uploads", secure_filename(filename))
     content = await file.read()
     with open(local_path, "wb") as f:
         f.write(content)
-    url = f"{UPLOADS_BASE_URL}/{filename}"
-    return {
-        "audio_url": url,
-        "message": f"Uploaded audio is served at {url}"
-    }
+    try:
+        with open(local_path, "rb") as af:
+            lang_lower = (language or "").strip().lower()
+            if lang_lower.startswith("ar"):
+                whisper_lang = "ar"
+            elif lang_lower.startswith("en"):
+                whisper_lang = "en"
+            else:
+                whisper_lang = None
+            result = openai.audio.transcriptions.create(
+                file=af,
+                model="whisper-1",
+                language=whisper_lang
+            )
+        transcription = result.text.strip()
+    finally:
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+    return {"text": transcription}
 
 
 async def generate_weblink_and_summary(prompt):
@@ -731,23 +744,18 @@ async def stream_answer(
     activity: str = Query(...),
     file_url: str = Query(None),
     image_url: str = Query(None),
-    audio_url: str = Query(None),
 ):
     """
-    Stream an answer, delegating to cloud RAG for uploaded files/images and Whisper transcription for audio.
+    Stream an answer, delegating to cloud RAG for uploaded files/images.
 
-    Uploaded assets must be at:
-      http://51.20.81.94:8000/uploads/<filename>.pdf,
-      http://51.20.81.94:8000/uploads/<filename>.png,
-      or http://51.20.81.94:8000/uploads/<filename>.wav.
-    Audio uploads will be fetched from that URL and transcribed to text by Whisper
-    (the `language` query parameter must be an ISO-639-1 code, e.g. "en" or "ar"; any other value will auto-detect),
-    then the transcript is used as the question for the model.
+    Uploaded assets (files/images) must be served from:
+      http://<host>:<port>/uploads/<filename>.(pdf|png).
+    The `question` query parameter must contain the user query text (for audio queries,
+    transcribe audio separately via `/upload-audio`).
     """
-    # Derive flags for PDF/image/audio uploads
+    # Derive flags for PDF/image uploads
     pdf_provided = bool(file_url)
     image_provided = bool(image_url)
-    audio_provided = bool(audio_url)
 
     if pdf_provided:
         formatted_history = await get_chat_history(chat_id)
@@ -757,38 +765,6 @@ async def stream_answer(
     elif image_provided:
         formatted_history = await get_chat_history(chat_id)
         vectors = await get_or_load_vectors(curriculum, image_url)
-        docs = await retrieve_documents(vectors, question)
-        context = "\n\n".join(doc.page_content for doc in docs)
-    elif audio_provided:
-        # Perform speech-to-text via Whisper, then local RAG on the transcript
-        audio_path = await download_file(audio_url, curriculum)
-        try:
-            with open(audio_path, "rb") as af:
-                # Normalize language to ISO-639-1 for Whisper or auto-detect
-                lang_lower = (language or "").strip().lower()
-                if lang_lower.startswith("ar"):
-                    whisper_lang = "ar"
-                elif lang_lower.startswith("en"):
-                    whisper_lang = "en"
-                else:
-                    whisper_lang = None
-
-                # Transcribe audio using OpenAI v1 interface
-                result = openai.audio.transcriptions.create(
-                    file=af,
-                    model="whisper-1",
-                    language=whisper_lang
-                )
-            # result is a Transcription Pydantic model; use its .text attribute
-            question = result.text.strip()
-        finally:
-            try:
-                os.remove(audio_path)
-            except OSError:
-                pass
-        formatted_history = await get_chat_history(chat_id)
-        pdf_src = await get_curriculum_url(curriculum)
-        vectors = await get_or_load_vectors(curriculum, pdf_src)
         docs = await retrieve_documents(vectors, question)
         context = "\n\n".join(doc.page_content for doc in docs)
     else:
