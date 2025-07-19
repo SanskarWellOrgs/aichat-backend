@@ -572,17 +572,25 @@ async def generate_runware_image(prompt):
     print(f"[DEBUG] Runware returned: {images}")
     return images[0].imageURL if images else None
 
-async def vision_caption_openai(img: Image.Image) -> str:
+async def vision_caption_openai(img: Image.Image = None, image_url: str = None) -> str:
     """
-    Caption an image using OpenAI GPT-4o Vision (base64-encoded inline).
+    Caption an image using OpenAI GPT-4o Vision.
+    Supports both in-memory PIL.Image (local files) and remote URLs.
     """
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    img_b64 = base64.b64encode(buf.getvalue()).decode()
+    if img is not None:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+        image_content = {"url": f"data:image/jpeg;base64,{img_b64}"}
+    elif image_url is not None:
+        image_content = {"url": image_url}
+    else:
+        raise ValueError("Must provide either img or image_url.")
+
     messages = [
         {"role": "user", "content": [
-            {"type": "text",      "text": "Describe this image in detail."},
-            {"type": "image_url", "image_url": f"data:image/jpeg;base64,{img_b64}"}
+            {"type": "text", "text": "Describe this image in detail."},
+            {"type": "image_url", "image_url": image_content}
         ]}
     ]
     resp = openai.chat.completions.create(
@@ -805,16 +813,10 @@ async def stream_answer(
         try:
             if local_file:
                 img = Image.open(local_file).convert("RGB")
+                question = await vision_caption_openai(img=img)
             else:
-                resp = requests.get(image_url, timeout=10)
-                resp.raise_for_status()
-                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        except Exception as e:
-            async def error_stream(e=e):
-                yield f"data: {json.dumps({'type':'error','error':f'Could not load/process image: {e}'})}\n\n"
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
-        try:
-            question = await vision_caption_openai(img)
+                # Pass the URL directly for remote images, do not load via requests
+                question = await vision_caption_openai(image_url=image_url)
         except Exception as e:
             async def error_stream(e=e):
                 yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
