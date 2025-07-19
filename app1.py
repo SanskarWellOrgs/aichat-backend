@@ -779,13 +779,13 @@ async def stream_answer(
     request: Request,
     role: str = Query(...),
     user_id: str = Query(...),
-    grade: str = Query(...),
+    grade: str = Query(None),
     curriculum: str = Query(...),
     language: str = Query(...),
     subject: str = Query(None),
-    question: str = Query(...),
+    question: str = Query(None),
     chat_id: str = Query(...),
-    activity: str = Query(...),
+    activity: str = Query(None),
     file_url: str = Query(None),
     image_url: str = Query(None),
 ):
@@ -2229,3 +2229,7 @@ def root():
     return HTMLResponse("""
     <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
     """)
+
+
+
+
