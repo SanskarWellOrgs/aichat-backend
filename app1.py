@@ -683,7 +683,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         f.write(content)
     url = f"{UPLOADS_BASE_URL}/{filename}"
     return {
-        "url": url,
+        "image_url": url,
         "message": f"Uploaded image is served at {url}"
     }
 
