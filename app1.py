@@ -791,13 +791,13 @@ async def stream_answer(
             resp.raise_for_status()
             img = Image.open(io.BytesIO(resp.content)).convert("RGB")
         except Exception as e:
-            async def error_stream():
+            async def error_stream(e=e):
                 yield f"data: {json.dumps({'type':'error','error':f'Could not load/process image: {e}'})}\n\n"
             return StreamingResponse(error_stream(), media_type="text/event-stream")
         try:
             question = await vision_caption_openai(img)
         except Exception as e:
-            async def error_stream():
+            async def error_stream(e=e):
                 yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
             return StreamingResponse(error_stream(), media_type="text/event-stream")
         # RAG on the generated caption text
