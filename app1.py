@@ -11,6 +11,9 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 import faiss
 import openai
+import requests
+import io
+import base64
 import edge_tts
 from PyPDF2 import PdfReader
 import tiktoken
@@ -557,6 +560,25 @@ async def generate_runware_image(prompt):
     print(f"[DEBUG] Runware returned: {images}")
     return images[0].imageURL if images else None
 
+async def vision_caption_openai(img: Image.Image) -> str:
+    """
+    Caption an image using OpenAI GPT-4o Vision (base64-encoded inline).
+    """
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode()
+    user_msg = (
+        "Describe this image in detail. "
+        f"data:image/jpeg;base64,{img_b64}"
+    )
+    resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": user_msg}],
+        max_tokens=256,
+        temperature=0.5
+    )
+    return resp.choices[0].message.content.strip()
+
 
 
 def remove_punctuation(text):
@@ -763,8 +785,25 @@ async def stream_answer(
         docs = await retrieve_documents(vectors, question)
         context = "\n\n".join(doc.page_content for doc in docs)
     elif image_provided:
+        # Download image and caption it with a vision model, then treat the caption as the question
+        try:
+            resp = requests.get(image_url, timeout=10)
+            resp.raise_for_status()
+            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        except Exception as e:
+            async def error_stream():
+                yield f"data: {json.dumps({'type':'error','error':f'Could not load/process image: {e}'})}\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        try:
+            question = await vision_caption_openai(img)
+        except Exception as e:
+            async def error_stream():
+                yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        # RAG on the generated caption text
         formatted_history = await get_chat_history(chat_id)
-        vectors = await get_or_load_vectors(curriculum, image_url)
+        pdf_src = await get_curriculum_url(curriculum)
+        vectors = await get_or_load_vectors(curriculum, pdf_src)
         docs = await retrieve_documents(vectors, question)
         context = "\n\n".join(doc.page_content for doc in docs)
     else:
