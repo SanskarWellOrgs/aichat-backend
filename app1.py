@@ -339,6 +339,18 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 UPLOADS_BASE_URL = "http://51.20.81.94:8000/uploads"
 # Base URL where generated graphs will be served
 GRAPHS_BASE_URL = "http://51.20.81.94:8000/graphs"
+
+def local_path_from_image_url(image_url):
+    """
+    If image_url points under our /uploads/ static mount, return the local file path;
+    otherwise return None.
+    """
+    if image_url and image_url.startswith(UPLOADS_BASE_URL + "/"):
+        filename = image_url.split(UPLOADS_BASE_URL + "/", 1)[1]
+        local_path = os.path.join("uploads", filename)
+        if os.path.exists(local_path):
+            return local_path
+    return None
 def generate_matplotlib_graph(prompt):
     """
     Tries to extract a function or equation from the prompt, plots it with matplotlib,
@@ -786,10 +798,15 @@ async def stream_answer(
         context = "\n\n".join(doc.page_content for doc in docs)
     elif image_provided:
         # Download image and caption it with a vision model, then treat the caption as the question
+        # Try direct disk access for uploaded images to avoid hairpin NAT; fallback to HTTP
+        local_file = local_path_from_image_url(image_url)
         try:
-            resp = requests.get(image_url, timeout=10)
-            resp.raise_for_status()
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            if local_file:
+                img = Image.open(local_file).convert("RGB")
+            else:
+                resp = requests.get(image_url, timeout=10)
+                resp.raise_for_status()
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
         except Exception as e:
             async def error_stream(e=e):
                 yield f"data: {json.dumps({'type':'error','error':f'Could not load/process image: {e}'})}\n\n"
