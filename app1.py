@@ -824,7 +824,7 @@ async def stream_answer(
     image_url: str = Query(None),
     file: str = Query(None),
     image: str = Query(None),
-    pdf_provided: bool = Query(None),
+    file_provided: bool = Query(None),
     image_provided: bool = Query(None),
 ):
     """
@@ -836,28 +836,28 @@ async def stream_answer(
     transcribe audio separately via `/upload-audio`).
 
     If you supply a Base64-encoded PDF via the `file` parameter, you must also include
-    `pdf_provided=true`.  Likewise, using a Base64-encoded image via `image` requires
+    `file_provided=true`.  Likewise, using a Base64-encoded image via `image` requires
     `image_provided=true`.  Requests omitting these flags will be rejected.
     """
-    # If Base64 file/image is provided, require explicit flag pdf_provided/image_provided
-    if file is not None and pdf_provided is None:
+    # If Base64 file/image is provided, require explicit flag file_provided/image_provided
+    if file is not None and file_provided is None:
         raise HTTPException(status_code=400,
-            detail="Missing 'pdf_provided=true' query parameter when uploading Base64 file")
+            detail="Missing 'file_provided=true' query parameter when uploading Base64 file")
     if image is not None and image_provided is None:
         raise HTTPException(status_code=400,
             detail="Missing 'image_provided=true' query parameter when uploading Base64 image")
     # Determine whether to run PDF‑ or Image‑RAG based on overrides or presence
-    if pdf_provided is None:
-        pdf_flag = bool(file_url or file)
+    if file_provided is None:
+        file_flag = bool(file_url or file)
     else:
-        pdf_flag = pdf_provided
+        file_flag = file_provided
 
     if image_provided is None:
         image_flag = bool(image_url or image)
     else:
         image_flag = image_provided
 
-    if pdf_flag:
+    if file_flag:
         # PDF‑RAG (Base64 or URL)
         if file:
             decoded = base64.b64decode(file)
@@ -867,7 +867,7 @@ async def stream_answer(
         elif file_url:
             source = file_url
         else:
-            raise HTTPException(status_code=400, detail="pdf_provided=true but no file or file_url given")
+            raise HTTPException(status_code=400, detail="file_provided=true but no file or file_url given")
 
         formatted_history = await get_chat_history(chat_id)
         vectors = await get_or_load_vectors(curriculum, source)
@@ -925,7 +925,7 @@ async def stream_answer(
     # Prepend initial SSE event carrying the image/pdf flags
     async def prepend_init(stream):
         # inform client which RAG mode is active
-        yield f"data: {json.dumps({'type':'init','image_provided': image_flag, 'pdf_provided': pdf_flag})}\n\n"
+        yield f"data: {json.dumps({'type':'init','image_provided': image_flag, 'file_provided': file_flag})}\n\n"
         async for evt in stream:
             yield evt
 
