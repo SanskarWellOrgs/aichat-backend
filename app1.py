@@ -43,6 +43,7 @@ except ImportError as e:
     ) from e
 import shutil
 import time
+import tempfile
 from pathlib import Path as FilePath
 import base64
 import logging
@@ -182,7 +183,11 @@ async def vector_embedding(curriculum, file_url):
     if await check_index_in_bucket(curriculum):
         await download_index_from_bucket(curriculum)
         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
-    file_path = await download_file(file_url, curriculum)
+    # If file_url is a local file path, skip download; otherwise download from URL
+    if os.path.exists(file_url):
+        file_path = file_url
+    else:
+        file_path = await download_file(file_url, curriculum)
     ext = FilePath(file_path).suffix.lower()
     if ext == '.pdf':
         loader = PyPDFLoader(file_path)
@@ -817,6 +822,8 @@ async def stream_answer(
     activity: str = Query(None),
     file_url: str = Query(None),
     image_url: str = Query(None),
+    file: str = Query(None),
+    image: str = Query(None),
 ):
     """
     Stream an answer, delegating to cloud RAG for uploaded files/images.
@@ -827,30 +834,62 @@ async def stream_answer(
     transcribe audio separately via `/upload-audio`).
     """
     # Derive flags for PDF/image uploads
-    pdf_provided = bool(file_url)
-    image_provided = bool(image_url)
+    pdf_provided = bool(file_url or file)
+    image_provided = bool(image_url or image)
 
-    if pdf_provided:
+    if file:
+        # Base64-encoded PDF provided directly
+        decoded = base64.b64decode(file)
+        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        tmpf.write(decoded)
+        tmpf.flush()
+        tmp_path = tmpf.name
+        tmpf.close()
+        formatted_history = await get_chat_history(chat_id)
+        vectors = await get_or_load_vectors(curriculum, tmp_path)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+        os.remove(tmp_path)
+    elif file_url:
         formatted_history = await get_chat_history(chat_id)
         vectors = await get_or_load_vectors(curriculum, file_url)
         docs = await retrieve_documents(vectors, question)
         context = "\n\n".join(doc.page_content for doc in docs)
-    elif image_provided:
+    elif image:
+        # Base64-encoded image provided directly
+        decoded = base64.b64decode(image)
+        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmpf.write(decoded)
+        tmpf.flush()
+        tmp_path = tmpf.name
+        tmpf.close()
+        try:
+            img = Image.open(tmp_path).convert("RGB")
+            question = await vision_caption_openai(img=img)
+        except Exception as e:
+            async def error_stream(e=e):
+                yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
+            os.remove(tmp_path)
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+        os.remove(tmp_path)
+        formatted_history = await get_chat_history(chat_id)
+        pdf_src = await get_curriculum_url(curriculum)
+        vectors = await get_or_load_vectors(curriculum, pdf_src)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+    elif image_url:
         # Download image and caption it with a vision model, then treat the caption as the question
-        # Try direct disk access for uploaded images to avoid hairpin NAT; fallback to HTTP
         local_file = local_path_from_image_url(image_url)
         try:
             if local_file:
                 img = Image.open(local_file).convert("RGB")
                 question = await vision_caption_openai(img=img)
             else:
-                # Pass the URL directly for remote images, do not load via requests
                 question = await vision_caption_openai(image_url=image_url)
         except Exception as e:
             async def error_stream(e=e):
                 yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
             return StreamingResponse(error_stream(), media_type="text/event-stream")
-        # RAG on the generated caption text
         formatted_history = await get_chat_history(chat_id)
         pdf_src = await get_curriculum_url(curriculum)
         vectors = await get_or_load_vectors(curriculum, pdf_src)
@@ -858,7 +897,6 @@ async def stream_answer(
         context = "\n\n".join(doc.page_content for doc in docs)
     else:
         formatted_history = await get_chat_history(chat_id)
-
         pdf_src = await get_curriculum_url(curriculum)
         vectors = await get_or_load_vectors(curriculum, pdf_src)
         docs = await retrieve_documents(vectors, question)
