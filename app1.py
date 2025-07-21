@@ -824,6 +824,8 @@ async def stream_answer(
     image_url: str = Query(None),
     file: str = Query(None),
     image: str = Query(None),
+    pdf_provided: bool = Query(None),
+    image_provided: bool = Query(None),
 ):
     """
     Stream an answer, delegating to cloud RAG for uploaded files/images.
@@ -832,70 +834,82 @@ async def stream_answer(
       http://<host>:<port>/uploads/<filename>.(pdf|png).
     The `question` query parameter must contain the user query text (for audio queries,
     transcribe audio separately via `/upload-audio`).
-    """
-    # Derive flags for PDF/image uploads
-    pdf_provided = bool(file_url or file)
-    image_provided = bool(image_url or image)
 
-    if file:
-        # Base64-encoded PDF provided directly
-        decoded = base64.b64decode(file)
-        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        tmpf.write(decoded)
-        tmpf.flush()
-        tmp_path = tmpf.name
-        tmpf.close()
-        formatted_history = await get_chat_history(chat_id)
-        vectors = await get_or_load_vectors(curriculum, tmp_path)
-        docs = await retrieve_documents(vectors, question)
-        context = "\n\n".join(doc.page_content for doc in docs)
-        os.remove(tmp_path)
-    elif file_url:
-        formatted_history = await get_chat_history(chat_id)
-        vectors = await get_or_load_vectors(curriculum, file_url)
-        docs = await retrieve_documents(vectors, question)
-        context = "\n\n".join(doc.page_content for doc in docs)
-    elif image:
-        # Base64-encoded image provided directly
-        decoded = base64.b64decode(image)
-        tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmpf.write(decoded)
-        tmpf.flush()
-        tmp_path = tmpf.name
-        tmpf.close()
-        try:
-            img = Image.open(tmp_path).convert("RGB")
-            question = await vision_caption_openai(img=img)
-        except Exception as e:
-            async def error_stream(e=e):
-                yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
-            os.remove(tmp_path)
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
-        os.remove(tmp_path)
-        formatted_history = await get_chat_history(chat_id)
-        pdf_src = await get_curriculum_url(curriculum)
-        vectors = await get_or_load_vectors(curriculum, pdf_src)
-        docs = await retrieve_documents(vectors, question)
-        context = "\n\n".join(doc.page_content for doc in docs)
-    elif image_url:
-        # Download image and caption it with a vision model, then treat the caption as the question
-        local_file = local_path_from_image_url(image_url)
-        try:
-            if local_file:
-                img = Image.open(local_file).convert("RGB")
-                question = await vision_caption_openai(img=img)
-            else:
-                question = await vision_caption_openai(image_url=image_url)
-        except Exception as e:
-            async def error_stream(e=e):
-                yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
-        formatted_history = await get_chat_history(chat_id)
-        pdf_src = await get_curriculum_url(curriculum)
-        vectors = await get_or_load_vectors(curriculum, pdf_src)
-        docs = await retrieve_documents(vectors, question)
-        context = "\n\n".join(doc.page_content for doc in docs)
+    If you supply a Base64-encoded PDF via the `file` parameter, you must also include
+    `pdf_provided=true`.  Likewise, using a Base64-encoded image via `image` requires
+    `image_provided=true`.  Requests omitting these flags will be rejected.
+    """
+    # If Base64 file/image is provided, require explicit flag pdf_provided/image_provided
+    if file is not None and pdf_provided is None:
+        raise HTTPException(status_code=400,
+            detail="Missing 'pdf_provided=true' query parameter when uploading Base64 file")
+    if image is not None and image_provided is None:
+        raise HTTPException(status_code=400,
+            detail="Missing 'image_provided=true' query parameter when uploading Base64 image")
+    # Determine whether to run PDF‑ or Image‑RAG based on overrides or presence
+    if pdf_provided is None:
+        pdf_flag = bool(file_url or file)
     else:
+        pdf_flag = pdf_provided
+
+    if image_provided is None:
+        image_flag = bool(image_url or image)
+    else:
+        image_flag = image_provided
+
+    if pdf_flag:
+        # PDF‑RAG (Base64 or URL)
+        if file:
+            decoded = base64.b64decode(file)
+            tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            tmpf.write(decoded); tmpf.flush(); tmp_path = tmpf.name; tmpf.close()
+            source = tmp_path
+        elif file_url:
+            source = file_url
+        else:
+            raise HTTPException(status_code=400, detail="pdf_provided=true but no file or file_url given")
+
+        formatted_history = await get_chat_history(chat_id)
+        vectors = await get_or_load_vectors(curriculum, source)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+        if file:
+            os.remove(source)
+
+    elif image_flag:
+        # Image‑RAG (Base64 or URL)
+        if image:
+            decoded = base64.b64decode(image)
+            tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmpf.write(decoded); tmpf.flush(); tmp_path = tmpf.name; tmpf.close()
+            try:
+                img = Image.open(tmp_path).convert("RGB")
+                question = await vision_caption_openai(img=img)
+            finally:
+                os.remove(tmp_path)
+        elif image_url:
+            local_file = local_path_from_image_url(image_url)
+            try:
+                if local_file:
+                    img = Image.open(local_file).convert("RGB")
+                    question = await vision_caption_openai(img=img)
+                else:
+                    question = await vision_caption_openai(image_url=image_url)
+            except Exception as e:
+                async def error_stream(e=e):
+                    yield f"data: {json.dumps({'type':'error','error':f'Vision model failed: {e}'})}\n\n"
+                return StreamingResponse(error_stream(), media_type="text/event-stream")
+        else:
+            raise HTTPException(status_code=400, detail="image_provided=true but no image or image_url given")
+
+        formatted_history = await get_chat_history(chat_id)
+        pdf_src = await get_curriculum_url(curriculum)
+        vectors = await get_or_load_vectors(curriculum, pdf_src)
+        docs = await retrieve_documents(vectors, question)
+        context = "\n\n".join(doc.page_content for doc in docs)
+
+    else:
+        # Default: curriculum-based RAG
         formatted_history = await get_chat_history(chat_id)
         pdf_src = await get_curriculum_url(curriculum)
         vectors = await get_or_load_vectors(curriculum, pdf_src)
@@ -910,7 +924,8 @@ async def stream_answer(
     # Wrapper to apply our cumulative clean+buffer logic to 'partial' SSE events
     # Prepend initial SSE event carrying the image/pdf flags
     async def prepend_init(stream):
-        yield f"data: {json.dumps({'type':'init','image_provided': image_provided, 'pdf_provided': pdf_provided})}\n\n"
+        # inform client which RAG mode is active
+        yield f"data: {json.dumps({'type':'init','image_provided': image_flag, 'pdf_provided': pdf_flag})}\n\n"
         async for evt in stream:
             yield evt
 
