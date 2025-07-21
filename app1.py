@@ -732,35 +732,64 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     }
 
 @app.post("/upload-audio")
-async def upload_audio(request: Request, file: UploadFile = File(...), language: str = Query(None)):
+async def upload_audio(request: Request,
+                       file: UploadFile = File(None),
+                       audio_url: str = Query(None),
+                       language: str = Query(None)):
     """
-    Save uploaded audio, transcribe using Whisper, and return the transcription text.
+    Transcribe audio to text using Whisper.
+    Accepts either a multipart file upload or an audio_url pointing to a hosted file.
     """
-    filename = file.filename or f"{uuid.uuid4()}.wav"
-    local_path = os.path.join("uploads", secure_filename(filename))
-    content = await file.read()
-    with open(local_path, "wb") as f:
-        f.write(content)
-    try:
-        with open(local_path, "rb") as af:
-            lang_lower = (language or "").strip().lower()
-            if lang_lower.startswith("ar"):
-                whisper_lang = "ar"
-            elif lang_lower.startswith("en"):
-                whisper_lang = "en"
-            else:
-                whisper_lang = None
+    if not file and not audio_url:
+        raise HTTPException(status_code=400, detail="Must provide audio file or audio_url")
+
+    # Determine transcription language hint
+    lang_lower = (language or "").strip().lower()
+    if lang_lower.startswith("ar"):
+        whisper_lang = "ar"
+    elif lang_lower.startswith("en"):
+        whisper_lang = "en"
+    else:
+        whisper_lang = None
+
+    # Read audio from upload or remote URL and transcribe
+    if file:
+        filename = file.filename or f"{uuid.uuid4()}.wav"
+        secure_name = secure_filename(filename)
+        local_path = os.path.join("uploads", secure_name)
+        content = await file.read()
+        with open(local_path, "wb") as f:
+            f.write(content)
+        try:
+            af = open(local_path, "rb")
             result = openai.audio.transcriptions.create(
                 file=af,
                 model="whisper-1",
                 language=whisper_lang
             )
+            transcription = result.text.strip()
+        finally:
+            af.close()
+            try:
+                os.remove(local_path)
+            except OSError:
+                pass
+    else:
+        # Fetch remote audio from provided URL
+        async with aiohttp.ClientSession() as session:
+            async with session.get(audio_url) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=400, detail=f"Failed to fetch audio: {resp.status}")
+                audio_bytes = await resp.read()
+        buf = io.BytesIO(audio_bytes)
+        buf.name = os.path.basename(urllib.parse.urlparse(audio_url).path) or f"{uuid.uuid4()}.wav"
+        result = openai.audio.transcriptions.create(
+            file=buf,
+            model="whisper-1",
+            language=whisper_lang
+        )
         transcription = result.text.strip()
-    finally:
-        try:
-            os.remove(local_path)
-        except OSError:
-            pass
+
     return {"text": transcription}
 
 
@@ -2229,7 +2258,3 @@ def root():
     return HTMLResponse("""
     <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
     """)
-
-
-
-
