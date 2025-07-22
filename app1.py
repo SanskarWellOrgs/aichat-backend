@@ -280,14 +280,28 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
 async def update_chat_history_speech(user_id, question, answer):
     """
     Append QA pair to Firestore speech history.
-
-    NOTE: question and answer may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; store raw Python str.
+    Store Unicode text (e.g. Arabic) directly as Python str without any encoding/re-encoding.
     """
+    # Log the input data to verify it contains the correct Unicode characters
+    print(f"[UNICODE DEBUG] Saving to history_chat_backend_speech - Question sample: {question[:50]}")
+    print(f"[UNICODE DEBUG] Saving to history_chat_backend_speech - Answer sample: {answer[:50]}")
+    
+    # Store raw Python str directly - no encoding/decoding needed
     ref = db.collection('history_chat_backend_speech').document(user_id)
     doc = ref.get()
     hist = doc.to_dict().get('history', []) if doc.exists else []
-    hist.append({'question': question, 'answer': answer})
+    
+    # Add raw strings directly to history - do not encode or process the strings in any way
+    hist.append({
+        'question': question,  # Store as-is without any encoding
+        'answer': answer       # Store as-is without any encoding
+    })
+    
+    # Firestore handles Unicode automatically - do not encode or process the strings
     ref.set({'history': hist})
+    
+    # Log success message
+    print(f"[UNICODE DEBUG] Successfully saved entry to history_chat_backend_speech for user {user_id}")
 
 # --- Matplotlib for graphing ---
 import matplotlib
@@ -2418,8 +2432,13 @@ async def add_chat_history(entry: ChatHistoryEntry):
     """
     Append a chat history entry to Firestore.
 
-    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
+    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; 
+    save directly as Python str. Firestore handles Unicode automatically.
     """
+    # Log the input data to verify it contains the correct Unicode characters
+    print(f"[UNICODE DEBUG] Saving to {entry.type} collection - Content sample: {entry.content[:50]}")
+    print(f"[UNICODE DEBUG] Content type: {type(entry.content)}")
+    
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
@@ -2430,10 +2449,11 @@ async def add_chat_history(entry: ChatHistoryEntry):
     if not collection_name:
         raise HTTPException(status_code=400, detail="Invalid type value")
 
+    # Create entry with raw string values - do not encode or process the strings in any way
     new_entry = {
         "id": entry.id,
         "role": entry.role,
-        "content": entry.content,
+        "content": entry.content,  # Store as-is without any encoding
         "audiourl": entry.audiourl,
         "imageselected": entry.imageselected,
     }
@@ -2441,9 +2461,15 @@ async def add_chat_history(entry: ChatHistoryEntry):
     doc_ref = db.collection(collection_name).document(entry.chat_id)
 
     try:
+        # Firestore handles Unicode automatically - do not encode or process the strings
         doc_ref.update({"history": firestore.ArrayUnion([new_entry])})
+        
+        # Log success message
+        print(f"[UNICODE DEBUG] Successfully saved entry to {collection_name} for chat {entry.chat_id}")
+        
         return {"message": f"Entry added to {collection_name} successfully"}
     except Exception as e:
+        print(f"[UNICODE ERROR] Failed to save to {collection_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2555,3 +2581,144 @@ async def options_route(path: str):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
+@app.post("/test-arabic-storage")
+async def test_arabic_storage(request: Request):
+    """
+    Test endpoint to verify that Arabic text is stored and retrieved correctly.
+    
+    POST body should be JSON with:
+    {
+        "user_id": "test_user_id",
+        "arabic_text": "النص العربي للاختبار"
+    }
+    """
+    try:
+        data = await request.json()
+        user_id = data.get("user_id", f"test_user_{uuid.uuid4().hex[:8]}")
+        arabic_text = data.get("arabic_text", "هذا نص عربي للاختبار")
+        
+        # Log the input
+        print(f"[ARABIC TEST] Input text: {arabic_text}")
+        print(f"[ARABIC TEST] Input text type: {type(arabic_text)}")
+        
+        # Create a test document with the Arabic text
+        test_doc_id = f"arabic_test_{uuid.uuid4().hex[:8]}"
+        test_ref = db.collection("arabic_test_collection").document(test_doc_id)
+        
+        # Store the text directly
+        test_ref.set({
+            "user_id": user_id,
+            "arabic_text": arabic_text,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+        
+        # Retrieve the document to verify
+        doc = test_ref.get()
+        retrieved_data = doc.to_dict()
+        retrieved_text = retrieved_data.get("arabic_text", "")
+        
+        # Log the retrieved text
+        print(f"[ARABIC TEST] Retrieved text: {retrieved_text}")
+        print(f"[ARABIC TEST] Retrieved text type: {type(retrieved_text)}")
+        
+        # Check if the text matches
+        is_match = arabic_text == retrieved_text
+        
+        # Return the results
+        return {
+            "success": True,
+            "original_text": arabic_text,
+            "retrieved_text": retrieved_text,
+            "is_match": is_match,
+            "test_doc_id": test_doc_id
+        }
+    except Exception as e:
+        print(f"[ARABIC TEST ERROR] {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+@app.get("/verify-arabic-data/{collection}/{document_id}")
+async def verify_arabic_data(collection: str, document_id: str):
+    """
+    Verify that Arabic data in a specific document is stored correctly.
+    
+    Parameters:
+    - collection: The Firestore collection name (e.g., "chat_details_ar", "history_chat_backend_speech")
+    - document_id: The document ID to check
+    
+    Returns the document data with any Arabic text found.
+    """
+    try:
+        # Get the document
+        doc_ref = db.collection(collection).document(document_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return {
+                "success": False,
+                "error": f"Document {document_id} not found in collection {collection}"
+            }
+        
+        data = doc.to_dict()
+        
+        # For chat history collections, extract the history array
+        if "history" in data:
+            # Get the last 5 entries or fewer if there are less
+            history = data.get("history", [])
+            recent_entries = history[-5:] if len(history) > 5 else history
+            
+            # Extract content from each entry
+            entries_with_content = []
+            for entry in recent_entries:
+                if isinstance(entry, dict) and "content" in entry:
+                    entries_with_content.append({
+                        "role": entry.get("role", "unknown"),
+                        "content": entry.get("content", ""),
+                        "content_type": type(entry.get("content", "")).__name__
+                    })
+            
+            return {
+                "success": True,
+                "collection": collection,
+                "document_id": document_id,
+                "recent_entries": entries_with_content,
+                "total_entries": len(history)
+            }
+        
+        # For speech history collection
+        elif collection == "history_chat_backend_speech":
+            history = data.get("history", [])
+            recent_entries = history[-5:] if len(history) > 5 else history
+            
+            entries_with_qa = []
+            for entry in recent_entries:
+                if isinstance(entry, dict):
+                    entries_with_qa.append({
+                        "question": entry.get("question", ""),
+                        "question_type": type(entry.get("question", "")).__name__,
+                        "answer": entry.get("answer", ""),
+                        "answer_type": type(entry.get("answer", "")).__name__
+                    })
+            
+            return {
+                "success": True,
+                "collection": collection,
+                "document_id": document_id,
+                "recent_entries": entries_with_qa,
+                "total_entries": len(history)
+            }
+        
+        # For other collections, return the raw data
+        return {
+            "success": True,
+            "collection": collection,
+            "document_id": document_id,
+            "data": data
+        }
+    except Exception as e:
+        print(f"[VERIFY ERROR] {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
