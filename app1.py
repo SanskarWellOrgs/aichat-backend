@@ -348,9 +348,15 @@ app = FastAPI()
 # --- CORS middleware setup ---
 from fastapi.middleware.cors import CORSMiddleware
 
+"""
+# CORS middleware setup
+# Use the ALLOW_ORIGINS env var (comma-separated) to whitelist your frontend domains,
+# or '*' to allow all origins (not recommended with credentials enabled).
+"""
+allow_origins = os.getenv("ALLOW_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
