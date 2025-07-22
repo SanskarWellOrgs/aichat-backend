@@ -76,9 +76,13 @@ logging.basicConfig(level=logging.DEBUG)
 
 if not firebase_admin._apps:
     FIREBASE_JSON = os.getenv("FIREBASE_JSON")
+    local_cred_file = FilePath(__file__).parent / "aischool-ba7c6-firebase-adminsdk-n8tjs-669d9da038.json"
     if FIREBASE_JSON:
         print("[INFO] Loading Firebase credentials from FIREBASE_JSON environment variable.")
         cred = credentials.Certificate(json.loads(FIREBASE_JSON))
+    elif local_cred_file.exists():
+        print(f"[INFO] Loading Firebase credentials from local file: {local_cred_file}")
+        cred = credentials.Certificate(str(local_cred_file))
     else:
         # Fetch from AWS Secrets Manager
         print("[INFO] Loading Firebase credentials from AWS Secrets Manager.")
@@ -103,8 +107,10 @@ async def get_curriculum_url(curriculum):
     doc = await asyncio.to_thread(lambda: db.collection('curriculum').document(curriculum).get())
     if not doc.exists:
         raise ValueError(f"No curriculum found with ID: {curriculum}")
-    url = doc.to_dict().get('url')
-    print(f"[RAG] Curriculum '{curriculum}' URL: {url}")
+    data = doc.to_dict()
+    # Prefer the converted PDF if available, otherwise fallback to the primary URL
+    url = data.get('ocrfile_id') or data.get('url')
+    print(f"[RAG] Curriculum '{curriculum}' serving URL: {url}")
     return url
 
 async def fetch_chat_detail(chat_id):
@@ -362,6 +368,20 @@ def local_path_from_image_url(image_url):
         if os.path.exists(local_path):
             return local_path
     return None
+
+@app.get("/curriculum-url")
+async def curriculum_url(
+    curriculum: str = Query(..., description="Curriculum document ID to fetch its PDF URL from Firestore")
+):
+    """
+    Return the PDF URL for the specified curriculum ID (fetched from Firestore).
+    Raises a 404 if the curriculum document does not exist.
+    """
+    try:
+        url = await get_curriculum_url(curriculum)
+        return {"curriculum": curriculum, "url": url}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 def generate_matplotlib_graph(prompt):
     """
     Tries to extract a function or equation from the prompt, plots it with matplotlib,
