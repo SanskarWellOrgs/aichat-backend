@@ -320,7 +320,7 @@ OPENAI_TO_EDGE_VOICE = {
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
-MAX_TOKENS_PER_CHUNK = 100_000
+MAX_TOKENS_PER_CHUNK = 4096
 RUNWARE_API_KEY = os.getenv("RUNWARE_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
 openai.api_key = OPENAI_API_KEY
@@ -2442,6 +2442,38 @@ async def add_chat_history(entry: ChatHistoryEntry):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/check-local-faiss/{curriculum_id}")
+async def check_local_faiss(curriculum_id: str):
+    """Check if FAISS index exists in AWS EC2 local storage."""
+    local_path = f'faiss/faiss_index_{curriculum_id}'
+    faiss_file = os.path.join(local_path, 'index.faiss')
+    pkl_file = os.path.join(local_path, 'index.pkl')
+    
+    return {
+        "location": "AWS EC2",
+        "path": local_path,
+        "faiss_exists": os.path.exists(faiss_file),
+        "pkl_exists": os.path.exists(pkl_file),
+        "faiss_size": os.path.getsize(faiss_file) if os.path.exists(faiss_file) else None,
+        "pkl_size": os.path.getsize(pkl_file) if os.path.exists(pkl_file) else None
+    }
+
+@app.get("/check-gcp-faiss/{curriculum_id}")
+async def check_gcp_faiss(curriculum_id: str):
+    """Check if FAISS index exists in GCP Firebase Storage."""
+    gcp_path = f'users/KnowledgeBase/faiss_index_{curriculum_id}'
+    faiss_blob = bucket.blob(f'{gcp_path}/index.faiss')
+    pkl_blob = bucket.blob(f'{gcp_path}/index.pkl')
+    
+    return {
+        "location": "GCP Firebase Storage",
+        "path": gcp_path,
+        "faiss_exists": faiss_blob.exists(),
+        "pkl_exists": pkl_blob.exists(),
+        "faiss_size": faiss_blob.size if faiss_blob.exists() else None,
+        "pkl_size": pkl_blob.size if pkl_blob.exists() else None
+    }
 
 @app.get("/")
 def root():
