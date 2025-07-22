@@ -2278,6 +2278,27 @@ async def get_full_answer(
     """
     Return the full, non-streamed answer along with context for debugging.
     """
+    # Build the same prompt_header logic as in stream_answer
+    prompt_header = ""
+    if (role or "").strip().lower() == "teacher":
+        prompt_header = teacher_prompt
+    elif (role or "").strip().lower() == "student":
+        try:
+            grade_num = int(grade)
+            prompt_header = student_prompt_1 if 1 <= grade_num <= 6 else student_prompt
+        except:
+            prompt_header = student_prompt
+    # Language enforcement
+    if language and language.lower().startswith("ar"):
+        prompt_header = ("STRICT RULE: Always answer ONLY in Arabic, even if the question/context/history is in another language. "
+                         "Translate all context if needed. Never use English in your answer.\n") + prompt_header
+    elif language and language.lower().startswith("en"):
+        prompt_header = ("STRICT RULE: Always answer ONLY in English, even if the question/context/history is in another language. "
+                         "Translate all context if needed. Never use Arabic in your answer.\n") + prompt_header
+    # Fill in user name
+    user_name = await get_user_name(user_id)
+    prompt_header = prompt_header.replace("{name}", user_name)
+    # Fetch history, file URL, and vectors
     formatted_history = await get_chat_history(chat_id)
     pdf_src = await get_curriculum_url(curriculum)
     vectors = await get_or_load_vectors(curriculum, pdf_src)
