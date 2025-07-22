@@ -366,10 +366,14 @@ app = FastAPI()
 # --- CORS middleware setup ---
 from fastapi.middleware.cors import CORSMiddleware
 
-# CORS middleware setup with all origins allowed
+# CORS middleware setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=[
+        "https://ai-school-postsse.web.app",  # Production frontend
+        "http://localhost:3000",              # Local development
+        "http://localhost:8000"               # Local testing
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # Allow all methods
     allow_headers=["*"],  # Allow all headers
