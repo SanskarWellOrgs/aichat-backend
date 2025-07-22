@@ -104,7 +104,7 @@ async def get_curriculum_url(curriculum):
     if not doc.exists:
         raise ValueError(f"No curriculum found with ID: {curriculum}")
     url = doc.to_dict().get('url')
-    logging.debug(f"[RAG] Curriculum '{curriculum}' URL: {url}")
+    print(f"[RAG] Curriculum '{curriculum}' URL: {url}")
     return url
 
 async def fetch_chat_detail(chat_id):
@@ -229,9 +229,9 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
     """Fetch and trim top-k docs by token count."""
     # similarity_search is sync; run in thread to avoid blocking the event loop
     docs = await asyncio.to_thread(vectorstore.similarity_search, query, k=k)
-    logging.debug(f"[RAG] Retrieved {len(docs)} docs for query: {query!r}")
+    print(f"[RAG] Retrieved {len(docs)} docs for query: {query!r}")
     if docs:
-        logging.debug(f"[RAG] First doc snippet: {docs[0].page_content[:200]!r}")
+        print(f"[RAG] First doc snippet: {docs[0].page_content[:200]!r}")
     total = 0
     out = []
     encoder = tiktoken.encoding_for_model('gpt-4')
@@ -2124,9 +2124,9 @@ Use it **properly for follow-up answers based on contex**.
     prompt_header = prompt_header.replace("{name}", user_name)
 
     # Final prompt: combine header, context (without echo markers), and question
-    logging.debug(f"[PROMPT] Previous history: {formatted_history!r}")
-    logging.debug(f"[PROMPT] Context length: {len(context)} chars; snippet: {context[:200]!r}")
-    logging.debug(f"[PROMPT] Question: {question!r}")
+    print(f"[PROMPT] Previous history: {formatted_history!r}")
+    print(f"[PROMPT] Context length: {len(context)} chars; snippet: {context[:200]!r}")
+    print(f"[PROMPT] Question: {question!r}")
     clean_header = prompt_header.replace("{previous_history}", formatted_history)
     user_content = (
         f"{clean_header}\n"
