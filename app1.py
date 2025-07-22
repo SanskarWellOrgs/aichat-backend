@@ -366,18 +366,40 @@ app = FastAPI()
 # --- CORS middleware setup ---
 from fastapi.middleware.cors import CORSMiddleware
 
-"""
 # CORS middleware setup
 # Use the ALLOW_ORIGINS env var (comma-separated) to whitelist your frontend domains,
 # or '*' to allow all origins (not recommended with credentials enabled).
-"""
-allow_origins = os.getenv("ALLOW_ORIGINS", "*").split(",")
+allow_origins = [
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://51.20.81.94",
+    "http://51.20.81.94:8000",
+    "https://51.20.81.94",
+    "https://51.20.81.94:8000",
+    # Add any other frontend URLs that need access
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Accept",
+        "Origin",
+        "X-Requested-With",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers",
+        "Access-Control-Allow-Origin"
+    ],
+    expose_headers=[
+        "Content-Length",
+        "Content-Range"
+    ],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
@@ -2542,3 +2564,12 @@ def root():
     return HTMLResponse("""
     <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
     """)
+
+@app.options("/{path:path}")
+async def options_route(path: str):
+    """Handle OPTIONS requests for CORS preflight."""
+    response = JSONResponse(content={"status": "ok"})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
