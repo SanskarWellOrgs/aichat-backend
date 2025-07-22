@@ -152,6 +152,7 @@ async def check_index_in_bucket(curriculum):
     return blob.exists()
 
 async def download_index_from_bucket(curriculum):
+    # Download the FAISS index files from GCS into the local faiss/faiss_index_{curriculum} folder
     dest = FilePath(f'faiss/faiss_index_{curriculum}')
     dest.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(
@@ -164,6 +165,7 @@ async def download_index_from_bucket(curriculum):
     )
 
 async def upload_index_to_bucket(curriculum):
+    # Upload local faiss/faiss_index_{curriculum} files back to GCS under users/KnowledgeBase/faiss_index_{curriculum}
     await asyncio.to_thread(
         bucket.blob(f'users/KnowledgeBase/faiss_index_{curriculum}/index.faiss').upload_from_filename,
         f'faiss/faiss_index_{curriculum}/index.faiss'
@@ -187,12 +189,20 @@ async def download_file(url, curriculum):
 
 async def vector_embedding(curriculum, file_url):
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
+    # Initialize embeddings and resolve the FAISS index directory absolutely
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
-    idx_dir = f'faiss/faiss_index_{curriculum}'
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     if await check_index_in_bucket(curriculum):
-        print(f"[RAG] vector_embedding: downloading existing FAISS index from bucket for curriculum={curriculum}")
-        await download_index_from_bucket(curriculum)
-        return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+        try:
+            print(f"[RAG] vector_embedding: downloading FAISS index from bucket for {curriculum}")
+            await download_index_from_bucket(curriculum)
+            print(f"[RAG] vector_embedding: loading FAISS index from {idx_dir}")
+            return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+        except Exception as e:
+            print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
+            # fallback to building the index from scratch
+            pass
     # If file_url is a local file path, skip download; otherwise download from URL
     if os.path.exists(file_url):
         file_path = file_url
@@ -219,22 +229,30 @@ async def vector_embedding(curriculum, file_url):
     return vectors
 
 async def get_or_load_vectors(curriculum, pdf_url):
-    """Optimized FAISS vector caching and retrieval."""
+    """Optimized FAISS vector caching and retrieval.
+
+    Note: In-memory cache resets on server restart; indexes persisted to disk/GCS for reuse."""
     print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
     if curriculum in curriculum_vectors:
         print(f"[RAG] get_or_load_vectors: using cached vectors for {curriculum}")
         return curriculum_vectors[curriculum]
-    idx_dir = f'faiss/faiss_index_{curriculum}'
-    exists = os.path.exists(idx_dir) and os.path.exists(f"{idx_dir}/index.faiss")
+    # Use an absolute path for the FAISS index directory
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
+    exists = os.path.exists(idx_dir) and os.path.exists(os.path.join(idx_dir, 'index.faiss'))
     print(f"[RAG] get_or_load_vectors: idx_dir={idx_dir}, exists={exists}")
     if exists:
-        print(f"[RAG] get_or_load_vectors: loading FAISS index from disk for {curriculum}")
-        vectors = await asyncio.to_thread(
-            FAISS.load_local,
-            idx_dir,
-            OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
-            allow_dangerous_deserialization=True,
-        )
+        try:
+            print(f"[RAG] get_or_load_vectors: loading FAISS index from disk for {curriculum}")
+            vectors = await asyncio.to_thread(
+                FAISS.load_local,
+                idx_dir,
+                OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                allow_dangerous_deserialization=True,
+            )
+        except Exception as e:
+            print(f"[RAG][ERROR] Failed to load FAISS index from {idx_dir}: {e}")
+            vectors = await vector_embedding(curriculum, pdf_url)
     else:
         vectors = await vector_embedding(curriculum, pdf_url)
     curriculum_vectors[curriculum] = vectors
