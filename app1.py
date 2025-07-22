@@ -186,9 +186,11 @@ async def download_file(url, curriculum):
     return path
 
 async def vector_embedding(curriculum, file_url):
+    print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
     idx_dir = f'faiss/faiss_index_{curriculum}'
     if await check_index_in_bucket(curriculum):
+        print(f"[RAG] vector_embedding: downloading existing FAISS index from bucket for curriculum={curriculum}")
         await download_index_from_bucket(curriculum)
         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
     # If file_url is a local file path, skip download; otherwise download from URL
@@ -206,8 +208,10 @@ async def vector_embedding(curriculum, file_url):
     else:
         raise ValueError(f"Unsupported file type for RAG: {ext}")
     docs = loader.load()
+    print(f"[RAG] vector_embedding: loaded {len(docs)} raw documents, snippet: {docs[0].page_content[:200]!r}")
     splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
     final_docs = splitter.split_documents(docs)
+    print(f"[RAG] vector_embedding: split into {len(final_docs)} chunks")
     vectors = FAISS.from_documents(final_docs, embeddings)
     vectors.save_local(idx_dir)
     await upload_index_to_bucket(curriculum)
@@ -216,10 +220,15 @@ async def vector_embedding(curriculum, file_url):
 
 async def get_or_load_vectors(curriculum, pdf_url):
     """Optimized FAISS vector caching and retrieval."""
+    print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
     if curriculum in curriculum_vectors:
+        print(f"[RAG] get_or_load_vectors: using cached vectors for {curriculum}")
         return curriculum_vectors[curriculum]
     idx_dir = f'faiss/faiss_index_{curriculum}'
-    if os.path.exists(idx_dir) and os.path.exists(f"{idx_dir}/index.faiss"):
+    exists = os.path.exists(idx_dir) and os.path.exists(f"{idx_dir}/index.faiss")
+    print(f"[RAG] get_or_load_vectors: idx_dir={idx_dir}, exists={exists}")
+    if exists:
+        print(f"[RAG] get_or_load_vectors: loading FAISS index from disk for {curriculum}")
         vectors = await asyncio.to_thread(
             FAISS.load_local,
             idx_dir,
@@ -251,7 +260,11 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
     return out
 
 async def update_chat_history_speech(user_id, question, answer):
-    """Append QA pair to Firestore speech history."""
+    """
+    Append QA pair to Firestore speech history.
+
+    NOTE: question and answer may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; store raw Python str.
+    """
     ref = db.collection('history_chat_backend_speech').document(user_id)
     doc = ref.get()
     hist = doc.to_dict().get('history', []) if doc.exists else []
@@ -2251,6 +2264,51 @@ Use it **properly for follow-up answers based on contex**.
     # Prepend init event and return raw event_stream (no cumulative buffering)
     return StreamingResponse(prepend_init(event_stream()), media_type="text/event-stream")
 
+@app.get("/answer")
+async def get_full_answer(
+    role: str = Query(...),
+    user_id: str = Query(...),
+    grade: str = Query(None),
+    curriculum: str = Query(...),
+    language: str = Query(...),
+    subject: str = Query(None),
+    question: str = Query(...),
+    chat_id: str = Query(...),
+):
+    """
+    Return the full, non-streamed answer along with context for debugging.
+    """
+    formatted_history = await get_chat_history(chat_id)
+    pdf_src = await get_curriculum_url(curriculum)
+    vectors = await get_or_load_vectors(curriculum, pdf_src)
+    docs = await retrieve_documents(vectors, question)
+    context = "\n\n".join(doc.page_content for doc in docs)
+
+    clean_header = prompt_header.replace("{previous_history}", formatted_history)
+    user_content = (
+        f"{clean_header}\n"
+        "(Do not repeat the words 'Context:' or 'Question:' in your answer.)\n\n"
+        f"{context}\n\n"
+        f"Now answer the question:\n{question}"
+    )
+    system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
+    user_message = {"role": "user", "content": user_content}
+    messages = [system_message, user_message]
+
+    resp = openai.chat.completions.create(
+        model="gpt-4.1",
+        messages=messages,
+        temperature=0.5,
+        max_tokens=2000,
+    )
+    full_answer = resp.choices[0].message.content.strip()
+    return {
+        "curriculum": curriculum,
+        "question": question,
+        "context": context,
+        "answer": full_answer,
+    }
+
 # ----------- Request Body Schema -----------
 
 class ChatHistoryEntry(BaseModel):
@@ -2308,6 +2366,11 @@ async def get_chat_detail_avatar(doc_id: str = Path(...)):
 
 @app.post("/api/chat-detail-store")
 async def add_chat_history(entry: ChatHistoryEntry):
+    """
+    Append a chat history entry to Firestore.
+
+    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
+    """
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
