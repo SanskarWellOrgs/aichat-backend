@@ -227,7 +227,8 @@ async def get_or_load_vectors(curriculum, pdf_url):
 
 async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k: int = 10):
     """Fetch and trim top-k docs by token count."""
-    docs = await vectorstore.similarity_search(query, k=k)
+    # similarity_search is sync; run in thread to avoid blocking the event loop
+    docs = await asyncio.to_thread(vectorstore.similarity_search, query, k=k)
     logging.debug(f"[RAG] Retrieved {len(docs)} docs for query: {query!r}")
     if docs:
         logging.debug(f"[RAG] First doc snippet: {docs[0].page_content[:200]!r}")
