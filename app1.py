@@ -366,40 +366,18 @@ app = FastAPI()
 # --- CORS middleware setup ---
 from fastapi.middleware.cors import CORSMiddleware
 
-# CORS middleware setup
-# Use the ALLOW_ORIGINS env var (comma-separated) to whitelist your frontend domains,
-# or '*' to allow all origins (not recommended with credentials enabled).
-allow_origins = [
-    "http://localhost",
-    "http://localhost:3000",
-    "http://localhost:8000",
-    "http://51.20.81.94",
-    "http://51.20.81.94:8000",
-    "https://51.20.81.94",
-    "https://51.20.81.94:8000",
-    # Add any other frontend URLs that need access
-]
-
+# CORS middleware setup with all origins allowed
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
-    allow_headers=[
-        "Content-Type",
-        "Authorization",
-        "Accept",
-        "Origin",
-        "X-Requested-With",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers",
-        "Access-Control-Allow-Origin"
-    ],
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
     expose_headers=[
         "Content-Length",
         "Content-Range"
     ],
-    max_age=3600,  # Cache preflight requests for 1 hour
+    max_age=3600  # Cache preflight requests for 1 hour
 )
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
