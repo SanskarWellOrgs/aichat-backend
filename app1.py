@@ -2461,19 +2461,81 @@ async def check_local_faiss(curriculum_id: str):
 
 @app.get("/check-gcp-faiss/{curriculum_id}")
 async def check_gcp_faiss(curriculum_id: str):
-    """Check if FAISS index exists in GCP Firebase Storage."""
-    gcp_path = f'users/KnowledgeBase/faiss_index_{curriculum_id}'
-    faiss_blob = bucket.blob(f'{gcp_path}/index.faiss')
-    pkl_blob = bucket.blob(f'{gcp_path}/index.pkl')
-    
-    return {
-        "location": "GCP Firebase Storage",
-        "path": gcp_path,
-        "faiss_exists": faiss_blob.exists(),
-        "pkl_exists": pkl_blob.exists(),
-        "faiss_size": faiss_blob.size if faiss_blob.exists() else None,
-        "pkl_size": pkl_blob.size if pkl_blob.exists() else None
-    }
+    """Check if FAISS index exists in GCP Firebase Storage with detailed error handling."""
+    try:
+        gcp_path = f'users/KnowledgeBase/faiss_index_{curriculum_id}'
+        faiss_blob = bucket.blob(f'{gcp_path}/index.faiss')
+        pkl_blob = bucket.blob(f'{gcp_path}/index.pkl')
+        
+        # Check existence with error handling
+        try:
+            faiss_exists = faiss_blob.exists()
+            print(f"[DEBUG] FAISS blob exists check: {faiss_exists}")
+        except Exception as e:
+            print(f"[ERROR] Failed to check FAISS blob existence: {str(e)}")
+            faiss_exists = False
+            
+        try:
+            pkl_exists = pkl_blob.exists()
+            print(f"[DEBUG] PKL blob exists check: {pkl_exists}")
+        except Exception as e:
+            print(f"[ERROR] Failed to check PKL blob existence: {str(e)}")
+            pkl_exists = False
+            
+        # Get metadata and sizes
+        faiss_metadata = None
+        pkl_metadata = None
+        faiss_size = None
+        pkl_size = None
+
+        if faiss_exists:
+            try:
+                faiss_blob.reload()  # Refresh metadata
+                faiss_size = faiss_blob.size
+                faiss_metadata = {
+                    'size': faiss_size,
+                    'updated': faiss_blob.updated,
+                    'md5_hash': faiss_blob.md5_hash,
+                    'content_type': faiss_blob.content_type
+                }
+            except Exception as e:
+                print(f"[ERROR] Failed to get FAISS metadata: {str(e)}")
+                
+        if pkl_exists:
+            try:
+                pkl_blob.reload()  # Refresh metadata
+                pkl_size = pkl_blob.size
+                pkl_metadata = {
+                    'size': pkl_size,
+                    'updated': pkl_blob.updated,
+                    'md5_hash': pkl_blob.md5_hash,
+                    'content_type': pkl_blob.content_type
+                }
+            except Exception as e:
+                print(f"[ERROR] Failed to get PKL metadata: {str(e)}")
+        
+        return {
+            "location": "GCP Firebase Storage",
+            "path": gcp_path,
+            "faiss_exists": faiss_exists,
+            "pkl_exists": pkl_exists,
+            "faiss_size": faiss_size,
+            "pkl_size": pkl_size,
+            "faiss_metadata": faiss_metadata,
+            "pkl_metadata": pkl_metadata,
+            "bucket_info": {
+                "name": bucket.name,
+                "path": f"gs://{bucket.name}/{gcp_path}"
+            }
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Top-level error in check_gcp_faiss: {str(e)}")
+        return {
+            "error": str(e),
+            "location": "GCP Firebase Storage",
+            "path": gcp_path if 'gcp_path' in locals() else None
+        }
 
 @app.get("/")
 def root():
