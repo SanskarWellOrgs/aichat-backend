@@ -384,18 +384,20 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://ai-school-postsse.web.app",  # Production frontend
-        "http://localhost:3000",              # Local development
-        "http://localhost:8000"               # Local testing
+        "https://ai-school-postsse.web.app",    # Production frontend
+        "https://ai-assistant.myddns.me",       # No-IP domain
+        "http://localhost:3000",                # Local development
+        "http://localhost:8000",                # Local testing
+        "*"                                     # Allow all origins during development
     ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],                        # Allow all methods
+    allow_headers=["*"],                        # Allow all headers
     expose_headers=[
         "Content-Length",
         "Content-Range"
     ],
-    max_age=3600  # Cache preflight requests for 1 hour
+    max_age=3600                               # Cache preflight requests for 1 hour
 )
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
@@ -408,9 +410,9 @@ app.mount("/graphs", StaticFiles(directory=GRAPHS_DIR), name="graphs")
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Base URL where uploaded files (PDF, image, audio) will be served
-UPLOADS_BASE_URL = "http://51.20.81.94:8000/uploads"
+UPLOADS_BASE_URL = "https://ai-assistant.myddns.me:8443/uploads"
 # Base URL where generated graphs will be served
-GRAPHS_BASE_URL = "http://51.20.81.94:8000/graphs"
+GRAPHS_BASE_URL = "https://ai-assistant.myddns.me:8443/graphs"
 
 def local_path_from_image_url(image_url):
     """
@@ -2722,3 +2724,17 @@ async def verify_arabic_data(collection: str, document_id: str):
             "success": False,
             "error": str(e)
         }
+if __name__ == "__main__":
+    import uvicorn
+    print("Starting server with HTTPS on https://0.0.0.0:8443")
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8443,
+        ssl_keyfile="/etc/letsencrypt/live/ai-assistant.myddns.me/privkey.pem",
+        ssl_certfile="/etc/letsencrypt/live/ai-assistant.myddns.me/fullchain.pem"
+    )
+@app.get("/test-cors")
+async def test_cors():
+    """Test endpoint for CORS."""
+    return {"message": "CORS is working!"}
