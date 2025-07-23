@@ -4,6 +4,7 @@ import re
 import json
 import string
 import random
+import sys  # Add this import
 from fastapi import FastAPI, UploadFile, File, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -214,7 +215,7 @@ async def download_file(url, curriculum):
     return path
 
 async def vector_embedding(curriculum, file_url):
-    """Build FAISS index from PDF with enhanced URL handling."""
+    """Build FAISS index from PDF with proper encoding handling."""
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
     
     # URL validation and normalization
@@ -236,7 +237,7 @@ async def vector_embedding(curriculum, file_url):
             print(f"[RAG][ERROR] Local file not found: {file_url}")
             raise FileNotFoundError(f"File not found: {file_url}")
     
-    # Initialize embeddings and resolve the FAISS index directory absolutely
+    # Initialize embeddings
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
@@ -249,9 +250,8 @@ async def vector_embedding(curriculum, file_url):
             return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
         except Exception as e:
             print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
-            # fallback to building the index from scratch
     
-    # If file_url is a local file path, skip download; otherwise download from URL
+    # Process the document
     try:
         if os.path.exists(file_url):
             print(f"[RAG] Using existing local file: {file_url}")
@@ -262,26 +262,36 @@ async def vector_embedding(curriculum, file_url):
             print(f"[RAG] File downloaded to: {file_path}")
         
         ext = FilePath(file_path).suffix.lower()
+        
+        # Load document with explicit encoding handling
         if ext == '.pdf':
             loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            # Ensure proper UTF-8 encoding for each document
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         elif ext in ('.doc', '.docx'):
             loader = Docx2txtLoader(file_path)
+            docs = loader.load()
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
             loader = UnstructuredImageLoader(file_path)
+            docs = loader.load()
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         else:
             raise ValueError(f"Unsupported file type for RAG: {ext}")
         
-        print(f"[RAG] Loading document with {loader.__class__.__name__}")
-        docs = loader.load()
-        print(f"[RAG] Loaded {len(docs)} raw documents")
+        print(f"[RAG] Loaded {len(docs)} documents with encoding: {sys.getdefaultencoding()}")
         if docs:
-            print(f"[RAG] First document snippet: {docs[0].page_content[:200]!r}")
+            print(f"[RAG] First doc sample (encoded): {docs[0].page_content[:200]!r}")
         
         splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
         final_docs = splitter.split_documents(docs)
         print(f"[RAG] Split into {len(final_docs)} chunks")
         
-        print(f"[RAG] Creating FAISS index")
+        print(f"[RAG] Creating FAISS index with explicit encoding")
         vectors = FAISS.from_documents(final_docs, embeddings)
         
         # Save locally and to bucket
@@ -386,28 +396,43 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
 async def update_chat_history_speech(user_id, question, answer):
     """
     Append QA pair to Firestore speech history.
-    Store Unicode text (e.g. Arabic) directly as Python str without any encoding/re-encoding.
+    Store Unicode text (e.g. Arabic) with proper encoding handling.
     """
-    # Log the input data to verify it contains the correct Unicode characters
-    print(f"[UNICODE DEBUG] Saving to history_chat_backend_speech - Question sample: {question[:50]}")
-    print(f"[UNICODE DEBUG] Saving to history_chat_backend_speech - Answer sample: {answer[:50]}")
-    
-    # Store raw Python str directly - no encoding/decoding needed
-    ref = db.collection('history_chat_backend_speech').document(user_id)
-    doc = ref.get()
-    hist = doc.to_dict().get('history', []) if doc.exists else []
-    
-    # Add raw strings directly to history - do not encode or process the strings in any way
-    hist.append({
-        'question': question,  # Store as-is without any encoding
-        'answer': answer       # Store as-is without any encoding
-    })
-    
-    # Firestore handles Unicode automatically - do not encode or process the strings
-    ref.set({'history': hist})
-    
-    # Log success message
-    print(f"[UNICODE DEBUG] Successfully saved entry to history_chat_backend_speech for user {user_id}")
+    try:
+        # Log the input data with encoding info
+        print(f"[UNICODE DEBUG] Question type: {type(question)}, encoding: {sys.getdefaultencoding()}")
+        print(f"[UNICODE DEBUG] Answer type: {type(answer)}, encoding: {sys.getdefaultencoding()}")
+        
+        # Ensure proper UTF-8 encoding
+        if isinstance(question, str):
+            question = question.encode('utf-8').decode('utf-8')
+        if isinstance(answer, str):
+            answer = answer.encode('utf-8').decode('utf-8')
+        
+        # Store in Firestore
+        ref = db.collection('history_chat_backend_speech').document(user_id)
+        doc = ref.get()
+        hist = doc.to_dict().get('history', []) if doc.exists else []
+        
+        # Add new entry with explicit encoding
+        hist.append({
+            'question': question,
+            'answer': answer,
+            'timestamp': firestore.SERVER_TIMESTAMP,
+            'encoding': 'utf-8'
+        })
+        
+        # Update Firestore
+        ref.set({'history': hist})
+        
+        print(f"[UNICODE DEBUG] Successfully saved entry with encoding info")
+        return True
+        
+    except Exception as e:
+        print(f"[UNICODE ERROR] Failed to save history: {str(e)}")
+        print(f"[UNICODE ERROR] Question sample: {question[:50] if question else None}")
+        print(f"[UNICODE ERROR] Answer sample: {answer[:50] if answer else None}")
+        raise
 
 # --- Matplotlib for graphing ---
 import matplotlib
@@ -2939,6 +2964,19 @@ if __name__ == "__main__":
         ssl_keyfile="/etc/letsencrypt/live/ai-assistant.myddns.me/privkey.pem",
         ssl_certfile="/etc/letsencrypt/live/ai-assistant.myddns.me/fullchain.pem"
     )
+def fix_text_encoding(text: str) -> str:
+    """Try to fix incorrectly encoded text, especially Arabic."""
+    try:
+        # Try to fix double-encoded text
+        return text.encode('latin1').decode('utf-8')
+    except:
+        try:
+            # Try direct UTF-8 decoding
+            return text.encode('utf-8').decode('utf-8')
+        except:
+            # Return original if both attempts fail
+            return text
+
 @app.get("/check-faiss-content/{curriculum_id}")
 async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
@@ -2961,25 +2999,34 @@ async def check_faiss_content(curriculum_id: str):
         try:
             vectors = FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
             
-            # Test search with a simple query
-            test_query = "introduction"
-            docs = vectors.similarity_search(test_query, k=2)
+            # Test searches with different queries
+            test_queries = ["introduction", "مقدمة", "الرياضيات", "mathematics"]
+            all_samples = {}
             
-            # Extract sample content
-            samples = []
-            for doc in docs:
-                samples.append({
-                    "content": doc.page_content[:200] + "...",
-                    "metadata": doc.metadata
-                })
+            for query in test_queries:
+                docs = vectors.similarity_search(query, k=2)
+                samples = []
+                for doc in docs:
+                    # Try to fix encoding
+                    content = fix_text_encoding(doc.page_content)
+                    
+                    samples.append({
+                        "content": content[:200] + "...",
+                        "content_bytes": content[:200].encode('utf-8').hex(),
+                        "metadata": doc.metadata
+                    })
+                all_samples[query] = samples
             
             return {
                 "status": "success",
                 "curriculum_id": curriculum_id,
                 "index_path": idx_dir,
                 "vector_count": vectors.index.ntotal if hasattr(vectors, 'index') else None,
-                "sample_query": test_query,
-                "sample_results": samples
+                "sample_results": all_samples,
+                "encoding_info": {
+                    "python_default": sys.getdefaultencoding(),
+                    "file_system": sys.getfilesystemencoding()
+                }
             }
             
         except Exception as e:
