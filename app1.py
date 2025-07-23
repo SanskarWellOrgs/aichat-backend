@@ -2710,11 +2710,74 @@ async def check_backend_dirs():
         "directories": results
     }
 
+@app.get("/check-faiss-content/{curriculum_id}")
+async def check_faiss_content(curriculum_id: str):
+    """Check the content of a FAISS index to verify it's working correctly."""
+    try:
+        # Initialize embeddings
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Get the FAISS index path
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum_id}')
+        
+        if not os.path.exists(idx_dir):
+            return {
+                "status": "error",
+                "message": f"FAISS index directory not found: {idx_dir}",
+                "curriculum_id": curriculum_id
+            }
+            
+        # Try to load the index
+        try:
+            vectors = FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+            
+            # Test search with a simple query
+            test_query = "introduction"
+            docs = vectors.similarity_search(test_query, k=2)
+            
+            # Extract sample content
+            samples = []
+            for doc in docs:
+                samples.append({
+                    "content": doc.page_content[:200] + "...",
+                    "metadata": doc.metadata
+                })
+            
+            return {
+                "status": "success",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir,
+                "vector_count": vectors.index.ntotal if hasattr(vectors, 'index') else None,
+                "sample_query": test_query,
+                "sample_results": samples
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to load/query FAISS index: {str(e)}",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Top-level error: {str(e)}",
+            "curriculum_id": curriculum_id
+        }
+
 @app.get("/")
-def root():
+async def root():
+    """Root endpoint with links to available tools."""
     return HTMLResponse("""
-    <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
-    <p>Check backend directories at <a href="/check-backend-dirs">/check-backend-dirs</a></p>
+    <h2>AI Assistant API Tools</h2>
+    <ul>
+        <li><a href="/frontend/index.html">Frontend UI</a></li>
+        <li><a href="/check-backend-dirs">Check Backend Directories</a></li>
+        <li><a href="/check-faiss-content/Dcul12T4b7uTG5xGqtEp">Check FAISS Index Content (Example)</a></li>
+    </ul>
     """)
 
 @app.options("/{path:path}")
@@ -2876,6 +2939,64 @@ if __name__ == "__main__":
         ssl_keyfile="/etc/letsencrypt/live/ai-assistant.myddns.me/privkey.pem",
         ssl_certfile="/etc/letsencrypt/live/ai-assistant.myddns.me/fullchain.pem"
     )
+@app.get("/check-faiss-content/{curriculum_id}")
+async def check_faiss_content(curriculum_id: str):
+    """Check the content of a FAISS index to verify it's working correctly."""
+    try:
+        # Initialize embeddings
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Get the FAISS index path
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum_id}')
+        
+        if not os.path.exists(idx_dir):
+            return {
+                "status": "error",
+                "message": f"FAISS index directory not found: {idx_dir}",
+                "curriculum_id": curriculum_id
+            }
+            
+        # Try to load the index
+        try:
+            vectors = FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+            
+            # Test search with a simple query
+            test_query = "introduction"
+            docs = vectors.similarity_search(test_query, k=2)
+            
+            # Extract sample content
+            samples = []
+            for doc in docs:
+                samples.append({
+                    "content": doc.page_content[:200] + "...",
+                    "metadata": doc.metadata
+                })
+            
+            return {
+                "status": "success",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir,
+                "vector_count": vectors.index.ntotal if hasattr(vectors, 'index') else None,
+                "sample_query": test_query,
+                "sample_results": samples
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to load/query FAISS index: {str(e)}",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Top-level error: {str(e)}",
+            "curriculum_id": curriculum_id
+        }
+
 @app.get("/test-cors")
 async def test_cors():
     """Test endpoint for CORS."""
