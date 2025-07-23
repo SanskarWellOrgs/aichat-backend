@@ -103,15 +103,41 @@ executor = ThreadPoolExecutor()
 curriculum_vectors = {}
 
 async def get_curriculum_url(curriculum):
-    """Fetch curriculum PDF URL from Firestore."""
-    doc = await asyncio.to_thread(lambda: db.collection('curriculum').document(curriculum).get())
-    if not doc.exists:
-        raise ValueError(f"No curriculum found with ID: {curriculum}")
-    data = doc.to_dict()
-    # Prefer the converted PDF if available, otherwise fallback to the primary URL
-    url = data.get('ocrfile_id') or data.get('url')
-    print(f"[RAG] Curriculum '{curriculum}' serving URL: {url}")
-    return url
+    """Fetch curriculum PDF URL from Firestore with enhanced error handling."""
+    try:
+        print(f"[RAG] Fetching curriculum document: {curriculum}")
+        doc = await asyncio.to_thread(lambda: db.collection('curriculum').document(curriculum).get())
+        
+        if not doc.exists:
+            print(f"[RAG][ERROR] Curriculum document not found: {curriculum}")
+            raise ValueError(f"No curriculum found with ID: {curriculum}")
+        
+        data = doc.to_dict()
+        print(f"[RAG] Document data: {data}")
+        
+        # Check both URL fields
+        ocr_url = data.get('ocrfile_id')
+        primary_url = data.get('url')
+        print(f"[RAG] Found URLs - OCR: {ocr_url}, Primary: {primary_url}")
+        
+        # Prefer OCR version, fallback to primary URL
+        url = ocr_url or primary_url
+        
+        if not url:
+            print(f"[RAG][ERROR] No valid URL found in curriculum document: {curriculum}")
+            raise ValueError(f"No valid URL found in curriculum document: {curriculum}")
+            
+        # Validate URL format
+        if not url.startswith(('http://', 'https://')):
+            print(f"[RAG][ERROR] Invalid URL format: {url}")
+            raise ValueError(f"Invalid URL format in curriculum document: {url}")
+            
+        print(f"[RAG] Successfully retrieved URL for curriculum '{curriculum}': {url}")
+        return url
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Failed to fetch curriculum URL: {str(e)}")
+        raise
 
 async def fetch_chat_detail(chat_id):
     """Fetch and format the last 3 QA pairs of chat history."""
@@ -188,75 +214,155 @@ async def download_file(url, curriculum):
     return path
 
 async def vector_embedding(curriculum, file_url):
+    """Build FAISS index from PDF with enhanced URL handling."""
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
+    
+    # URL validation and normalization
+    if file_url.startswith(('http://', 'https://')):
+        print(f"[RAG] Processing remote URL: {file_url}")
+        try:
+            # Test URL accessibility
+            async with aiohttp.ClientSession() as session:
+                async with session.head(file_url) as response:
+                    if response.status != 200:
+                        print(f"[RAG][ERROR] URL not accessible: {file_url} (status: {response.status})")
+                        raise ValueError(f"URL not accessible: {file_url}")
+        except Exception as e:
+            print(f"[RAG][ERROR] Failed to validate URL {file_url}: {str(e)}")
+            raise
+    else:
+        print(f"[RAG] Processing local file: {file_url}")
+        if not os.path.exists(file_url):
+            print(f"[RAG][ERROR] Local file not found: {file_url}")
+            raise FileNotFoundError(f"File not found: {file_url}")
+    
     # Initialize embeddings and resolve the FAISS index directory absolutely
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
+    
     if await check_index_in_bucket(curriculum):
         try:
-            print(f"[RAG] vector_embedding: downloading FAISS index from bucket for {curriculum}")
+            print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
             await download_index_from_bucket(curriculum)
-            print(f"[RAG] vector_embedding: loading FAISS index from {idx_dir}")
+            print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
             return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
         except Exception as e:
             print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
             # fallback to building the index from scratch
-            pass
+    
     # If file_url is a local file path, skip download; otherwise download from URL
-    if os.path.exists(file_url):
-        file_path = file_url
-    else:
-        file_path = await download_file(file_url, curriculum)
-    ext = FilePath(file_path).suffix.lower()
-    if ext == '.pdf':
-        loader = PyPDFLoader(file_path)
-    elif ext in ('.doc', '.docx'):
-        loader = Docx2txtLoader(file_path)
-    elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
-        loader = UnstructuredImageLoader(file_path)
-    else:
-        raise ValueError(f"Unsupported file type for RAG: {ext}")
-    docs = loader.load()
-    print(f"[RAG] vector_embedding: loaded {len(docs)} raw documents, snippet: {docs[0].page_content[:200]!r}")
-    splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
-    final_docs = splitter.split_documents(docs)
-    print(f"[RAG] vector_embedding: split into {len(final_docs)} chunks")
-    vectors = FAISS.from_documents(final_docs, embeddings)
-    vectors.save_local(idx_dir)
-    await upload_index_to_bucket(curriculum)
-    os.remove(file_path)
-    return vectors
+    try:
+        if os.path.exists(file_url):
+            print(f"[RAG] Using existing local file: {file_url}")
+            file_path = file_url
+        else:
+            print(f"[RAG] Downloading file from URL: {file_url}")
+            file_path = await download_file(file_url, curriculum)
+            print(f"[RAG] File downloaded to: {file_path}")
+        
+        ext = FilePath(file_path).suffix.lower()
+        if ext == '.pdf':
+            loader = PyPDFLoader(file_path)
+        elif ext in ('.doc', '.docx'):
+            loader = Docx2txtLoader(file_path)
+        elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
+            loader = UnstructuredImageLoader(file_path)
+        else:
+            raise ValueError(f"Unsupported file type for RAG: {ext}")
+        
+        print(f"[RAG] Loading document with {loader.__class__.__name__}")
+        docs = loader.load()
+        print(f"[RAG] Loaded {len(docs)} raw documents")
+        if docs:
+            print(f"[RAG] First document snippet: {docs[0].page_content[:200]!r}")
+        
+        splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
+        final_docs = splitter.split_documents(docs)
+        print(f"[RAG] Split into {len(final_docs)} chunks")
+        
+        print(f"[RAG] Creating FAISS index")
+        vectors = FAISS.from_documents(final_docs, embeddings)
+        
+        # Save locally and to bucket
+        print(f"[RAG] Saving FAISS index to {idx_dir}")
+        vectors.save_local(idx_dir)
+        print(f"[RAG] Uploading FAISS index to bucket")
+        await upload_index_to_bucket(curriculum)
+        
+        # Clean up downloaded file if it was remote
+        if file_path != file_url:
+            print(f"[RAG] Cleaning up downloaded file: {file_path}")
+            os.remove(file_path)
+        
+        return vectors
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Failed to process document: {str(e)}")
+        raise
 
 async def get_or_load_vectors(curriculum, pdf_url):
-    """Optimized FAISS vector caching and retrieval.
-
-    Note: In-memory cache resets on server restart; indexes persisted to disk/GCS for reuse."""
+    """Optimized FAISS vector caching and retrieval with enhanced error handling."""
     print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
+    
+    # Check in-memory cache first
     if curriculum in curriculum_vectors:
-        print(f"[RAG] get_or_load_vectors: using cached vectors for {curriculum}")
+        print(f"[RAG] Using cached vectors for {curriculum}")
         return curriculum_vectors[curriculum]
-    # Use an absolute path for the FAISS index directory
+        
+    # Use absolute path for FAISS index directory
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     exists = os.path.exists(idx_dir) and os.path.exists(os.path.join(idx_dir, 'index.faiss'))
-    print(f"[RAG] get_or_load_vectors: idx_dir={idx_dir}, exists={exists}")
-    if exists:
-        try:
-            print(f"[RAG] get_or_load_vectors: loading FAISS index from disk for {curriculum}")
-            vectors = await asyncio.to_thread(
-                FAISS.load_local,
-                idx_dir,
-                OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
-                allow_dangerous_deserialization=True,
-            )
-        except Exception as e:
-            print(f"[RAG][ERROR] Failed to load FAISS index from {idx_dir}: {e}")
-            vectors = await vector_embedding(curriculum, pdf_url)
-    else:
+    print(f"[RAG] Local FAISS index check - dir={idx_dir}, exists={exists}")
+    
+    try:
+        # Try loading from local disk first
+        if exists:
+            print(f"[RAG] Loading FAISS index from disk for {curriculum}")
+            try:
+                vectors = await asyncio.to_thread(
+                    FAISS.load_local,
+                    idx_dir,
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    allow_dangerous_deserialization=True,
+                )
+                print(f"[RAG] Successfully loaded local FAISS index for {curriculum}")
+                curriculum_vectors[curriculum] = vectors
+                return vectors
+            except Exception as e:
+                print(f"[RAG][ERROR] Failed to load local FAISS index: {str(e)}")
+                # Fall through to rebuilding the index
+        
+        # If local load failed or doesn't exist, check Firebase Storage
+        print(f"[RAG] Checking Firebase Storage for FAISS index: {curriculum}")
+        if await check_index_in_bucket(curriculum):
+            try:
+                print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
+                await download_index_from_bucket(curriculum)
+                vectors = await asyncio.to_thread(
+                    FAISS.load_local,
+                    idx_dir,
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    allow_dangerous_deserialization=True,
+                )
+                print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
+                curriculum_vectors[curriculum] = vectors
+                return vectors
+            except Exception as e:
+                print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
+                # Fall through to rebuilding the index
+        
+        # If all else fails, rebuild the index from PDF
+        print(f"[RAG] Building new FAISS index for {curriculum} from {pdf_url}")
         vectors = await vector_embedding(curriculum, pdf_url)
-    curriculum_vectors[curriculum] = vectors
-    return vectors
+        print(f"[RAG] Successfully built new FAISS index for {curriculum}")
+        curriculum_vectors[curriculum] = vectors
+        return vectors
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Critical error in get_or_load_vectors: {str(e)}")
+        raise ValueError(f"Failed to load or create vectors for curriculum {curriculum}: {str(e)}")
 
 async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k: int = 10):
     """Fetch and trim top-k docs by token count."""
@@ -786,7 +892,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     """
     Save uploaded PDF and return its static URL.
     Uploaded files are served from:
-      http://51.20.81.94:8000/uploads/{filename}.pdf
+      https://ai-assistant.myddns.me:8443/uploads/{filename}.pdf
     where {filename} is the actual filename of the uploaded PDF.
     """
     filename = file.filename or f"{uuid.uuid4()}.pdf"
@@ -805,7 +911,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     """
     Save uploaded image and return its static URL.
     Uploaded files are served from:
-      http://51.20.81.94:8000/uploads/{filename}.png
+      https://ai-assistant.myddns.me:8443/uploads/{filename}.png
     where {filename} is the actual filename of the uploaded image.
     """
     filename = file.filename or f"{uuid.uuid4()}.png"
@@ -2569,10 +2675,46 @@ async def check_gcp_faiss(curriculum_id: str):
             "path": gcp_path if 'gcp_path' in locals() else None
         }
 
+@app.get("/check-backend-dirs")
+async def check_backend_dirs():
+    """Check if critical backend directories exist and are writable."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    dirs_to_check = ['uploads', 'faiss', 'graphs', 'audio_sents']
+    
+    results = {}
+    for dir_name in dirs_to_check:
+        dir_path = os.path.join(base_dir, dir_name)
+        exists = os.path.exists(dir_path)
+        is_dir = os.path.isdir(dir_path) if exists else False
+        is_writable = os.access(dir_path, os.W_OK) if exists else False
+        
+        # Try to list contents if directory exists
+        contents = []
+        if exists and is_dir:
+            try:
+                contents = os.listdir(dir_path)[:5]  # List up to 5 items
+            except Exception as e:
+                contents = [f"Error listing contents: {str(e)}"]
+        
+        results[dir_name] = {
+            "exists": exists,
+            "is_directory": is_dir,
+            "is_writable": is_writable,
+            "path": dir_path,
+            "sample_contents": contents
+        }
+    
+    return {
+        "server_url": "https://ai-assistant.myddns.me:8443",
+        "base_directory": base_dir,
+        "directories": results
+    }
+
 @app.get("/")
 def root():
     return HTMLResponse("""
     <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
+    <p>Check backend directories at <a href="/check-backend-dirs">/check-backend-dirs</a></p>
     """)
 
 @app.options("/{path:path}")
