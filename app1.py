@@ -377,11 +377,10 @@ async def update_chat_history_speech(user_id, question, answer):
         doc = ref.get()
         hist = doc.to_dict().get('history', []) if doc.exists else []
         
-        # Add new entry without re-encoding
+        # Add new entry without SERVER_TIMESTAMP (it causes issues)
         hist.append({
             'question': question,
-            'answer': answer,
-            'timestamp': firestore.SERVER_TIMESTAMP
+            'answer': answer
         })
         
         # Update Firestore
@@ -1003,16 +1002,10 @@ async def stream_answer(
 ):
     """
     Stream an answer, delegating to cloud RAG for uploaded files/images.
-
-    Uploaded assets (files/images) must be served from:
-      http://<host>:<port>/uploads/<filename>.(pdf|png).
-    The `question` query parameter must contain the user query text (for audio queries,
-    transcribe audio separately via `/upload-audio`).
-
-    If you supply a Base64-encoded PDF via the `file` parameter, you must also include
-    `file_provided=true`.  Likewise, using a Base64-encoded image via `image` requires
-    `image_provided=true`.  Requests omitting these flags will be rejected.
     """
+    print(f"[DEBUG] stream_answer called with question: {question}")
+    print(f"[DEBUG] Parameters - role: {role}, curriculum: {curriculum}, language: {language}")
+    
     # If Base64 file/image is provided, require explicit flag file_provided/image_provided
     if file is not None and file_provided is None:
         raise HTTPException(status_code=400,
@@ -1030,6 +1023,8 @@ async def stream_answer(
         image_flag = bool(image_url or image)
     else:
         image_flag = image_provided
+
+    print(f"[DEBUG] file_flag: {file_flag}, image_flag: {image_flag}")
 
     if file_flag:
         # PDF‑RAG (Base64 or URL)
@@ -1084,11 +1079,22 @@ async def stream_answer(
 
     else:
         # Default: curriculum-based RAG
+        print(f"[DEBUG] Using default curriculum-based RAG")
         formatted_history = await get_chat_history(chat_id)
+        print(f"[DEBUG] Chat history length: {len(formatted_history)}")
+        
         pdf_src = await get_curriculum_url(curriculum)
+        print(f"[DEBUG] PDF source: {pdf_src}")
+        
         vectors = await get_or_load_vectors(curriculum, pdf_src)
+        print(f"[DEBUG] Vectors loaded successfully")
+        
         docs = await retrieve_documents(vectors, question)
+        print(f"[DEBUG] Retrieved {len(docs)} documents")
+        
         context = "\n\n".join(doc.page_content for doc in docs)
+        print(f"[DEBUG] Context length: {len(context)} characters")
+        print(f"[DEBUG] Context preview: {context[:200]}...")
 
     norm_question = question.strip().lower()
     is_teacher = (role or "").strip().lower() == "teacher"
@@ -2292,9 +2298,12 @@ Use it **properly for follow-up answers based on contex**.
     prompt_header = prompt_header.replace("{name}", user_name)
 
     # Final prompt: combine header, context (without echo markers), and question
-    print(f"[PROMPT] Previous history: {formatted_history!r}")
-    print(f"[PROMPT] Context length: {len(context)} chars; snippet: {context[:200]!r}")
-    print(f"[PROMPT] Question: {question!r}")
+    print(f"[DEBUG] Previous history: {formatted_history[:100]}..." if len(formatted_history) > 100 else f"[DEBUG] Previous history: {formatted_history}")
+    print(f"[DEBUG] Context length: {len(context)} chars; snippet: {context[:200]!r}")
+    print(f"[DEBUG] Question: {question!r}")
+    print(f"[DEBUG] User name: {user_name}")
+    print(f"[DEBUG] Prompt header length: {len(prompt_header)} chars")
+    
     clean_header = prompt_header.replace("{previous_history}", formatted_history)
     user_content = (
         f"{clean_header}\n"
@@ -2302,6 +2311,9 @@ Use it **properly for follow-up answers based on contex**.
         f"{context}\n\n"
         f"Now answer the question:\n{question}"
     )
+    
+    print(f"[DEBUG] Final user_content length: {len(user_content)} chars")
+    
     system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
@@ -2788,8 +2800,7 @@ async def test_arabic_storage(request: Request):
         # Store the text directly
         test_ref.set({
             "user_id": user_id,
-            "arabic_text": arabic_text,
-            "timestamp": firestore.SERVER_TIMESTAMP
+            "arabic_text": arabic_text
         })
         
         # Retrieve the document to verify
