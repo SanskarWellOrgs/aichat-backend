@@ -2463,7 +2463,17 @@ Use it **properly for follow-up answers based on contex**.
     
     print(f"[DEBUG] Final user_content length: {len(user_content)} chars")
     
-    system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
+    # Build system message with language instruction
+    system_content = SYSTEM_LATEX_BAN
+    if language and language.lower().startswith("ar"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "Translate any English content to Arabic in your response. Never use English.\n"
+    elif language and language.lower().startswith("en"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
+    system_content += "You are an expert assistant."
+    
+    system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
 
@@ -2622,7 +2632,17 @@ async def get_full_answer(
         f"{context}\n\n"
         f"Now answer the question:\n{question}"
     )
-    system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
+    # Build system message with language instruction
+    system_content = SYSTEM_LATEX_BAN
+    if language and language.lower().startswith("ar"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "Translate any English content to Arabic in your response. Never use English.\n"
+    elif language and language.lower().startswith("en"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
+    system_content += "You are an expert assistant."
+    
+    system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
 
