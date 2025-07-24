@@ -348,21 +348,33 @@ async def get_or_load_vectors(curriculum, pdf_url):
 
 async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k: int = 10):
     """Fetch and trim top-k docs by token count."""
+    print(f"[DEBUG] retrieve_documents called with query: '{query}', k={k}")
+    
     # similarity_search is sync; run in thread to avoid blocking the event loop
     docs = await asyncio.to_thread(vectorstore.similarity_search, query, k=k)
-    print(f"[RAG] Retrieved {len(docs)} docs for query: {query!r}")
+    print(f"[DEBUG] Retrieved {len(docs)} docs for query: {query!r}")
+    
     if docs:
-        print(f"[RAG] First doc snippet: {docs[0].page_content[:200]!r}")
+        print(f"[DEBUG] First doc snippet: {docs[0].page_content[:200]!r}")
+        print(f"[DEBUG] First doc metadata: {docs[0].metadata}")
+    else:
+        print(f"[DEBUG] No documents retrieved for query: {query}")
+        return []
+    
     total = 0
     out = []
     encoder = tiktoken.encoding_for_model('gpt-4')
-    for d in docs:
+    for i, d in enumerate(docs):
         nt = len(encoder.encode(d.page_content))
+        print(f"[DEBUG] Doc {i}: {nt} tokens, content preview: {d.page_content[:100]!r}")
         if total + nt <= max_tokens:
             out.append(d)
             total += nt
         else:
+            print(f"[DEBUG] Stopping at doc {i} due to token limit")
             break
+    
+    print(f"[DEBUG] Final selection: {len(out)} docs, {total} total tokens")
     return out
 
 async def update_chat_history_speech(user_id, question, answer):
