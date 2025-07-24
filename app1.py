@@ -2590,18 +2590,106 @@ async def get_chat_detail_avatar(doc_id: str = Path(...)):
 
 # ----------- POST Endpoint -----------
 
+def normalize_arabic_text(text: str) -> str:
+    """Normalize Arabic text to ensure consistent encoding"""
+    if not isinstance(text, str):
+        return str(text)
+    try:
+        # Normalize to NFC form (canonical decomposition followed by canonical composition)
+        import unicodedata
+        normalized = unicodedata.normalize('NFC', text)
+        # Ensure it's valid UTF-8
+        return normalized.encode('utf-8').decode('utf-8')
+    except Exception as e:
+        print(f"[ERROR] Unicode normalization failed: {str(e)}")
+        return text
+
 @app.post("/api/chat-detail-store")
 async def add_chat_history(entry: ChatHistoryEntry):
     """
-    Append a chat history entry to Firestore.
-
-    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
+    Append a chat history entry to Firestore with proper Arabic text handling.
     """
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
         "normal": "chat_detail",
     }
+    
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
+    
+    try:
+        # Normalize the content before storage
+        entry_dict = {
+            "id": entry.id,
+            "role": entry.role,
+            "content": normalize_arabic_text(entry.content),
+            "audiourl": entry.audiourl,
+            "imageselected": entry.imageselected
+        }
+        
+        # Get existing history or create new
+        doc_ref = db.collection(collection_name).document(entry.chat_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            history = data.get("history", [])
+            history.append(entry_dict)
+            doc_ref.update({
+                "history": history,
+                "encoding": "utf-8",
+                "normalized": True  # Mark as properly normalized
+            })
+        else:
+            doc_ref.set({
+                "history": [entry_dict],
+                "encoding": "utf-8",
+                "normalized": True
+            })
+            
+        return JSONResponse(
+            content={"status": "success", "message": "Chat history updated"},
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to store chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chat-detail/{doc_id}")
+async def get_chat_detail(doc_id: str = Path(...)):
+    """Get chat detail with proper Arabic text handling"""
+    doc_ref = db.collection("chat_detail").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        
+        # Handle Arabic text in history items
+        if "history" in data:
+            for item in data["history"]:
+                if isinstance(item.get("content"), str):
+                    item["content"] = normalize_arabic_text(item["content"])
+                # Handle other text fields that might contain Arabic
+                for field in ["question", "answer"]:
+                    if isinstance(item.get(field), str):
+                        item[field] = normalize_arabic_text(item[field])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Content-Encoding": "utf-8"
+            }
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
 
     collection_name = type_mapping.get(entry.type)
     if not collection_name:
