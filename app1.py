@@ -550,11 +550,18 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import shutil
 
-# --- System-level LaTeX prohibition (always enforced) ---
-SYSTEM_LATEX_BAN = (
-    "STRICT RULE: Do NOT generate any LaTeX code or markup (\\frac, \\left, \\right, $...$). "
-    "Only use plain-text stacked fractions when required.\n"
-)
+# --- System-level Math Instructions ---
+SYSTEM_MATH_INSTRUCTION = """
+When writing mathematical expressions:
+1. Always use LaTeX syntax with \\frac{}{} for fractions
+2. Wrap ALL equations in $$....$$ for block rendering
+3. For Arabic text inside equations, wrap it in \\text{} like \\text{إذا كان س < ٣}
+4. Examples:
+   - Simple fraction: $$\\frac{1}{2}$$
+   - Arabic equation: $$\\frac{س + ١}{ص - ٢} = \\text{حيث} \\text{س} \\neq 0$$
+   - Complex fraction: $$\\frac{\\text{البسط}}{\\text{المقام}}$$
+5. Keep Arabic words connected and readable using \\text{}
+"""
 
 
 # OpenAI-style TTS voice names mapped to Edge TTS voices
@@ -933,29 +940,6 @@ async def vision_caption_openai(img: Image.Image = None, image_url: str = None) 
 def remove_punctuation(text):
     return re.sub(r'[{}]+'.format(re.escape(string.punctuation)), '', text)
 
-# --- LaTeX fraction and cleanup helpers ---
-import re
-
-def process_response_text(text: str) -> str:
-    """Process response text to handle fractions and other formatting"""
-    # First convert LaTeX fractions to stacked format
-    text = latex_frac_to_stacked(text)
-    return text
-
-def latex_frac_to_stacked(text):
-    # Replace all \frac{a}{b} with stacked plain text
-    pattern = r"\\frac\s*\{([^{}]+)\}\{([^{}]+)\}"
-    def repl(match):
-        num = match.group(1).strip()
-        denom = match.group(2).strip()
-        width = max(len(num), len(denom))
-        line = '―' * (width + 2)
-        num_pad = (width - len(num)) // 2
-        denom_pad = (width - len(denom)) // 2
-        num_str = " " * (num_pad + 1) + num
-        denom_str = " " * (denom_pad + 1) + denom
-        return f"{num_str}\n{line}\n{denom_str}"
-    return re.sub(pattern, repl, text)
 
 
 def sanitize_for_tts(text):
@@ -976,6 +960,7 @@ def remove_latex(text):
     text = re.sub(r"\\[a-zA-Z]+", "", text)
     text = text.replace("{", "").replace("}", "")
     return text
+
 
 class PDFIndex:
     def __init__(self):
@@ -1409,8 +1394,7 @@ async def stream_answer(
                                 sent = sent.strip()
                                 if not sent:
                                     continue
-                                processed = latex_frac_to_stacked(sent)
-                                clean_sent = sanitize_for_tts(processed)
+                                clean_sent = sanitize_for_tts(sent)
                                 yield f"data: {json.dumps({'type':'audio_pending','sentence': sent})}\n\n"
                                 communicate_stream = edge_tts.Communicate(clean_sent, voice=tts_voice)
                                 last_chunk = None
@@ -2469,24 +2453,15 @@ Use it **properly for follow-up answers based on contex**.
     
     print(f"[DEBUG] Final user_content length: {len(user_content)} chars")
     
-    # Build system message with language instruction
-    system_content = SYSTEM_LATEX_BAN
+    # Build system message with language and math instructions
+    system_content = SYSTEM_MATH_INSTRUCTION
     if language and language.lower().startswith("ar"):
-        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "\nSTRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
         system_content += "Translate any English content to Arabic in your response. Never use English.\n"
     elif language and language.lower().startswith("en"):
-        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "\nSTRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
         system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
-    system_content += "You are an expert assistant."
-    
-    # Add math instruction to system content
-    SYSTEM_MATH_INSTRUCTION = """
-    When writing mathematical expressions with fractions:
-    1. Use \\frac{numerator}{denominator} format
-    2. Write complex equations clearly
-    3. Example: \\frac{x+1}{y-2} for (x+1)/(y-2)
-    """
-    system_content = SYSTEM_MATH_INSTRUCTION + system_content
+
     # Build the system message
     system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
@@ -2509,9 +2484,8 @@ Use it **properly for follow-up answers based on contex**.
 
         async def stream_audio(sentence):
             try:
-                # Transform any LaTeX fractions into stacked form before sanitizing
-                sent_for_tts = latex_frac_to_stacked(sentence)
-                clean_sentence = sanitize_for_tts(sent_for_tts)
+                # Clean up text for TTS (preserve LaTeX math syntax)
+                clean_sentence = sanitize_for_tts(sentence)
                 if not clean_sentence.strip():
                     print("[TTS SKIP] Empty or whitespace sentence, skipping.")
                     return
@@ -2550,9 +2524,8 @@ Use it **properly for follow-up answers based on contex**.
                 buffer += content
                 answer_so_far += content
 
-                # Send only the latest chunk to frontend
-                delta_cleaned = remove_latex(latex_frac_to_stacked(content))
-                yield f"data: {json.dumps({'type':'partial','partial': delta_cleaned})}\n\n"
+                # Send raw content (expecting LaTeX math with $$...$$ from the model)
+                yield f"data: {json.dumps({'type':'partial','partial': content})}\n\n"
 
                 # Flush full sentences for TTS as soon as they complete
                 last = 0
@@ -2647,16 +2620,15 @@ async def get_full_answer(
         f"{context}\n\n"
         f"Now answer the question:\n{question}"
     )
-    # Build system message with language instruction
-    system_content = SYSTEM_LATEX_BAN
+    # Build system message with language and math instructions
+    system_content = SYSTEM_MATH_INSTRUCTION
     if language and language.lower().startswith("ar"):
-        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "\nSTRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
         system_content += "Translate any English content to Arabic in your response. Never use English.\n"
     elif language and language.lower().startswith("en"):
-        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "\nSTRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
         system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
-    system_content += "You are an expert assistant."
-    
+
     system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
