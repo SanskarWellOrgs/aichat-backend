@@ -172,6 +172,45 @@ async def get_curriculum_url(curriculum):
         print(f"[RAG][ERROR] Failed to fetch curriculum URL: {str(e)}")
         raise
 
+def decode_arabic_text(text: str) -> str:
+    """
+    Decode potentially corrupted Arabic text back to proper Unicode.
+    Handles various encoding issues including double-encoding.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    
+    try:
+        # If text is already proper Arabic, return as is
+        if any('\u0600' <= c <= '\u06FF' for c in text):
+            return text
+            
+        # Try different encoding combinations to fix corrupted text
+        encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+        for enc in encodings:
+            try:
+                # Try to decode assuming it was encoded with this encoding
+                decoded = text.encode('latin1').decode(enc)
+                # If we got Arabic text, return it
+                if any('\u0600' <= c <= '\u06FF' for c in decoded):
+                    return decoded
+            except:
+                continue
+                
+        # If above fails, try forcing utf-8 decode
+        try:
+            decoded = text.encode('latin1').decode('utf-8')
+            return decoded
+        except:
+            pass
+            
+        # If all fails, return original
+        return text
+    except Exception as e:
+        print(f"[ERROR] Arabic decode failed: {str(e)}")
+        return text
+
+
 async def fetch_chat_detail(chat_id):
     """Fetch and format the last 3 QA pairs of chat history."""
     chat_ref = db.collection('chat_detail').document(chat_id)
@@ -408,6 +447,71 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 30000, k
     
     print(f"[DEBUG] Final selection: {len(out)} docs, {total} total tokens")
     return out
+
+def decode_arabic_text(text: str) -> str:
+    """
+    Decode potentially corrupted Arabic text back to proper Unicode.
+    Handles various encoding issues including double-encoding.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    
+    try:
+        # If text is already proper Arabic, return as is
+        if any('\u0600' <= c <= '\u06FF' for c in text):
+            return text
+            
+        # Try different encoding combinations to fix corrupted text
+        encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+        for enc in encodings:
+            try:
+                # Try to decode assuming it was encoded with this encoding
+                decoded = text.encode('latin1').decode(enc)
+                # If we got Arabic text, return it
+                if any('\u0600' <= c <= '\u06FF' for c in decoded):
+                    return decoded
+            except:
+                continue
+                
+        # If above fails, try forcing utf-8 decode
+        try:
+            decoded = text.encode('latin1').decode('utf-8')
+            return decoded
+        except:
+            pass
+            
+        # If all fails, return original
+        return text
+    except Exception as e:
+        print(f"[ERROR] Arabic decode failed: {str(e)}")
+        return text
+
+def normalize_arabic_text(text: str) -> str:
+    """
+    Normalize Arabic text to ensure consistent encoding and proper display.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    
+    try:
+        # First decode if it's corrupted
+        text = decode_arabic_text(text)
+        
+        # Then normalize to NFC form
+        import unicodedata
+        normalized = unicodedata.normalize('NFC', text)
+        
+        # Ensure it's valid UTF-8
+        return normalized.encode('utf-8').decode('utf-8')
+    except Exception as e:
+        print(f"[ERROR] Arabic normalization failed: {str(e)}")
+        return text
+
+def process_text_fields(item: dict, fields: list) -> None:
+    """Process multiple text fields in a dictionary for Arabic text handling"""
+    for field in fields:
+        if isinstance(item.get(field), str):
+            item[field] = decode_arabic_text(item[field])
 
 async def update_chat_history_speech(user_id, question, answer):
     """
@@ -2551,39 +2655,84 @@ class ChatHistoryEntry(BaseModel):
 
 @app.get("/api/chat-detail/{doc_id}")
 async def get_chat_detail(doc_id: str = Path(...)):
+    """Get chat detail with improved Arabic text handling"""
     doc_ref = db.collection("chat_detail").document(doc_id)
     doc = doc_ref.get()
 
     if doc.exists:
         data = doc.to_dict()
         data["id"] = doc.id
-        return JSONResponse(content=data)
+        
+        # Handle Arabic text in history items
+        if "history" in data:
+            for item in data["history"]:
+                process_text_fields(item, ["content", "question", "answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Content-Encoding": "utf-8"
+            }
+        )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
 
 
 @app.get("/api/chat-detail-ar/{doc_id}")
 async def get_chat_detail_ar(doc_id: str = Path(...)):
+    """Get Arabic chat detail with improved Arabic text handling"""
     doc_ref = db.collection("chat_details_ar").document(doc_id)
     doc = doc_ref.get()
 
     if doc.exists:
         data = doc.to_dict()
         data["id"] = doc.id
-        return JSONResponse(content=data)
+        
+        # Handle Arabic text in history items
+        if "history" in data:
+            for item in data["history"]:
+                process_text_fields(item, ["content", "question", "answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Content-Encoding": "utf-8"
+            }
+        )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
 
 
 @app.get("/api/avatarchatdetails/{doc_id}")
 async def get_chat_detail_avatar(doc_id: str = Path(...)):
+    """Get avatar chat detail with improved Arabic text handling"""
     doc_ref = db.collection("avatarchatdetails").document(doc_id)
     doc = doc_ref.get()
 
     if doc.exists:
         data = doc.to_dict()
         data["id"] = doc.id
-        return JSONResponse(content=data)
+        
+        # Handle Arabic text in history items
+        if "history" in data:
+            for item in data["history"]:
+                process_text_fields(item, ["content", "question", "answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Content-Encoding": "utf-8"
+            }
+        )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -2607,7 +2756,7 @@ def normalize_arabic_text(text: str) -> str:
 @app.post("/api/chat-detail-store")
 async def add_chat_history(entry: ChatHistoryEntry):
     """
-    Append a chat history entry to Firestore with proper Arabic text handling.
+    Append a chat history entry to Firestore with improved Arabic text handling.
     """
     type_mapping = {
         "ar": "chat_details_ar",
@@ -2620,13 +2769,18 @@ async def add_chat_history(entry: ChatHistoryEntry):
         raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
     
     try:
-        # Normalize the content before storage
+        # First decode if the input is somehow corrupted
+        content = decode_arabic_text(entry.content)
+        
+        # Create entry with decoded content
         entry_dict = {
             "id": entry.id,
             "role": entry.role,
-            "content": normalize_arabic_text(entry.content),
+            "content": content,
             "audiourl": entry.audiourl,
-            "imageselected": entry.imageselected
+            "imageselected": entry.imageselected,
+            "timestamp": datetime.now().isoformat(),
+            "encoding": "utf-8"
         }
         
         # Get existing history or create new
@@ -2639,14 +2793,59 @@ async def add_chat_history(entry: ChatHistoryEntry):
             history.append(entry_dict)
             doc_ref.update({
                 "history": history,
-                "encoding": "utf-8",
-                "normalized": True  # Mark as properly normalized
+                "last_updated": datetime.now().isoformat()
             })
         else:
             doc_ref.set({
                 "history": [entry_dict],
-                "encoding": "utf-8",
-                "normalized": True
+                "created_at": datetime.now().isoformat()
+            })
+            
+        return JSONResponse(
+            content={"status": "success", "message": "Chat history updated"},
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to store chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
+    
+    try:
+        # First decode if the input is somehow corrupted
+        content = decode_arabic_text(entry.content)
+        
+        # Create entry with decoded content
+        entry_dict = {
+            "id": entry.id,
+            "role": entry.role,
+            "content": content,
+            "audiourl": entry.audiourl,
+            "imageselected": entry.imageselected,
+            "timestamp": datetime.now().isoformat(),
+            "encoding": "utf-8"
+        }
+        
+        # Get existing history or create new
+        doc_ref = db.collection(collection_name).document(entry.chat_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            history = data.get("history", [])
+            history.append(entry_dict)
+            doc_ref.update({
+                "history": history,
+                "last_updated": datetime.now().isoformat()
+            })
+        else:
+            doc_ref.set({
+                "history": [entry_dict],
+                "created_at": datetime.now().isoformat()
             })
             
         return JSONResponse(
@@ -2659,9 +2858,11 @@ async def add_chat_history(entry: ChatHistoryEntry):
         print(f"[ERROR] Failed to store chat history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 @app.get("/api/chat-detail/{doc_id}")
 async def get_chat_detail(doc_id: str = Path(...)):
-    """Get chat detail with proper Arabic text handling"""
+    """Get chat detail with improved Arabic text handling"""
     doc_ref = db.collection("chat_detail").document(doc_id)
     doc = doc_ref.get()
 
@@ -2672,12 +2873,10 @@ async def get_chat_detail(doc_id: str = Path(...)):
         # Handle Arabic text in history items
         if "history" in data:
             for item in data["history"]:
-                if isinstance(item.get("content"), str):
-                    item["content"] = normalize_arabic_text(item["content"])
-                # Handle other text fields that might contain Arabic
-                for field in ["question", "answer"]:
+                # Process all text fields that might contain Arabic
+                for field in ["content", "question", "answer"]:
                     if isinstance(item.get(field), str):
-                        item[field] = normalize_arabic_text(item[field])
+                        item[field] = decode_arabic_text(item[field])
         
         # Return with proper encoding headers
         return JSONResponse(
@@ -2690,26 +2889,6 @@ async def get_chat_detail(doc_id: str = Path(...)):
         )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
-
-    collection_name = type_mapping.get(entry.type)
-    if not collection_name:
-        raise HTTPException(status_code=400, detail="Invalid type value")
-
-    new_entry = {
-        "id": entry.id,
-        "role": entry.role,
-        "content": entry.content,
-        "audiourl": entry.audiourl,
-        "imageselected": entry.imageselected,
-    }
-
-    doc_ref = db.collection(collection_name).document(entry.chat_id)
-
-    try:
-        doc_ref.update({"history": firestore.ArrayUnion([new_entry])})
-        return {"message": f"Entry added to {collection_name} successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/check-local-faiss/{curriculum_id}")
