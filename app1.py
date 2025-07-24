@@ -2737,6 +2737,95 @@ async def get_chat_detail_avatar(doc_id: str = Path(...)):
         )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/api/chat-detail-ar/{doc_id}")
+async def get_chat_detail_ar(doc_id: str = Path(...)):
+    """Get Arabic chat detail with proper Unicode handling"""
+    doc_ref = db.collection("chat_details_ar").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Handle content field which may contain Arabic text
+                if isinstance(item.get("content"), str):
+                    item["content"] = ensure_unicode(item["content"])
+                # Handle any other text fields that might contain Arabic
+                if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
+@app.get("/api/avatarchatdetails/{doc_id}")
+async def get_chat_detail_avatar(doc_id: str = Path(...)):
+    """Get avatar chat detail with proper Unicode handling"""
+    doc_ref = db.collection("avatarchatdetails").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Handle content field which may contain Arabic text
+                if isinstance(item.get("content"), str):
+                    item["content"] = ensure_unicode(item["content"])
+                # Handle any other text fields that might contain Arabic
+                if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Handle content field which may contain Arabic text
+                if isinstance(item.get("content"), str):
+                    item["content"] = ensure_unicode(item["content"])
+                # Handle any other text fields that might contain Arabic
+                if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
                     item["question"] = item["question"].encode('utf-8').decode('utf-8')
                 if isinstance(item.get("answer"), str):
                     item["answer"] = item["answer"].encode('utf-8').decode('utf-8')
