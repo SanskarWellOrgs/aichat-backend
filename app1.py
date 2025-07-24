@@ -409,11 +409,20 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 30000, k
     print(f"[DEBUG] Final selection: {len(out)} docs, {total} total tokens")
     return out
 
+def ensure_unicode(text: str) -> str:
+    """Ensure text is properly encoded as Unicode"""
+    if isinstance(text, str):
+        try:
+            # Try to encode and decode to catch any encoding issues
+            return text.encode('utf-8').decode('utf-8')
+        except UnicodeError:
+            # If there's an encoding error, try to fix it
+            return text.encode('utf-8', errors='replace').decode('utf-8')
+    return str(text)
+
 async def update_chat_history_speech(user_id, question, answer):
     """
-    Append QA pair to Firestore speech history.
-
-    NOTE: question and answer may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; store raw Python str.
+    Append QA pair to Firestore speech history with proper Unicode handling.
     """
     try:
         # Store in Firestore
@@ -421,11 +430,15 @@ async def update_chat_history_speech(user_id, question, answer):
         doc = ref.get()
         hist = doc.to_dict().get('history', []) if doc.exists else []
         
-        # Add new entry without SERVER_TIMESTAMP (it causes issues)
-        hist.append({
+        # Ensure proper Unicode handling
+        qa_entry = {
             'question': question,
-            'answer': answer
-        })
+            'answer': answer,
+            'encoding': 'utf-8'  # Mark as UTF-8 encoded
+        }
+        
+        # Add new entry without SERVER_TIMESTAMP
+        hist.append(qa_entry)
         
         # Update Firestore
         ref.set({'history': hist})
@@ -2358,7 +2371,17 @@ Use it **properly for follow-up answers based on contex**.
     
     print(f"[DEBUG] Final user_content length: {len(user_content)} chars")
     
-    system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
+    # Add language instruction to system message
+    system_content = SYSTEM_LATEX_BAN
+    if language and language.lower().startswith("ar"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "Translate any English content to Arabic in your response. Never use English.\n"
+    elif language and language.lower().startswith("en"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
+    system_content += "You are an expert assistant."
+    
+    system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
 
@@ -2517,7 +2540,18 @@ async def get_full_answer(
         f"{context}\n\n"
         f"Now answer the question:\n{question}"
     )
-    system_message = {"role": "system", "content": SYSTEM_LATEX_BAN + "You are an expert assistant."}
+    
+    # Add language instruction to system message
+    system_content = SYSTEM_LATEX_BAN
+    if language and language.lower().startswith("ar"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in Arabic only, regardless of input language. "
+        system_content += "Translate any English content to Arabic in your response. Never use English.\n"
+    elif language and language.lower().startswith("en"):
+        system_content += "STRICT RULE: You MUST ALWAYS respond in English only, regardless of input language. "
+        system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
+    system_content += "You are an expert assistant."
+    
+    system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
 
@@ -2551,26 +2585,57 @@ class ChatHistoryEntry(BaseModel):
 
 @app.get("/api/chat-detail/{doc_id}")
 async def get_chat_detail(doc_id: str = Path(...)):
+    """Get chat detail with proper Unicode handling"""
     doc_ref = db.collection("chat_detail").document(doc_id)
     doc = doc_ref.get()
 
     if doc.exists:
         data = doc.to_dict()
         data["id"] = doc.id
-        return JSONResponse(content=data)
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Ensure strings are properly handled as UTF-8
+                if isinstance(item.get("question"), str):
+                    item["question"] = item["question"].encode('utf-8').decode('utf-8')
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = item["answer"].encode('utf-8').decode('utf-8')
+        
+        # Use FastAPI's JSONResponse with proper encoding
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8"
+        )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
 
 
 @app.get("/api/chat-detail-ar/{doc_id}")
 async def get_chat_detail_ar(doc_id: str = Path(...)):
+    """Get Arabic chat detail with proper Unicode handling"""
     doc_ref = db.collection("chat_details_ar").document(doc_id)
     doc = doc_ref.get()
 
     if doc.exists:
         data = doc.to_dict()
         data["id"] = doc.id
-        return JSONResponse(content=data)
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Ensure strings are properly handled as UTF-8
+                if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Use FastAPI's JSONResponse with proper encoding
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
     else:
         raise HTTPException(status_code=404, detail="Document not found")
 
