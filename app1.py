@@ -4,6 +4,7 @@ import re
 import json
 import string
 import random
+import sys  # Add this import
 from fastapi import FastAPI, UploadFile, File, Request, Query, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,15 +104,41 @@ executor = ThreadPoolExecutor()
 curriculum_vectors = {}
 
 async def get_curriculum_url(curriculum):
-    """Fetch curriculum PDF URL from Firestore."""
-    doc = await asyncio.to_thread(lambda: db.collection('curriculum').document(curriculum).get())
-    if not doc.exists:
-        raise ValueError(f"No curriculum found with ID: {curriculum}")
-    data = doc.to_dict()
-    # Prefer the converted PDF if available, otherwise fallback to the primary URL
-    url = data.get('ocrfile_id') or data.get('url')
-    print(f"[RAG] Curriculum '{curriculum}' serving URL: {url}")
-    return url
+    """Fetch curriculum PDF URL from Firestore with enhanced error handling."""
+    try:
+        print(f"[RAG] Fetching curriculum document: {curriculum}")
+        doc = await asyncio.to_thread(lambda: db.collection('curriculum').document(curriculum).get())
+        
+        if not doc.exists:
+            print(f"[RAG][ERROR] Curriculum document not found: {curriculum}")
+            raise ValueError(f"No curriculum found with ID: {curriculum}")
+        
+        data = doc.to_dict()
+        print(f"[RAG] Document data: {data}")
+        
+        # Check both URL fields
+        ocr_url = data.get('ocrfile_id')
+        primary_url = data.get('url')
+        print(f"[RAG] Found URLs - OCR: {ocr_url}, Primary: {primary_url}")
+        
+        # Prefer OCR version, fallback to primary URL
+        url = ocr_url or primary_url
+        
+        if not url:
+            print(f"[RAG][ERROR] No valid URL found in curriculum document: {curriculum}")
+            raise ValueError(f"No valid URL found in curriculum document: {curriculum}")
+            
+        # Validate URL format
+        if not url.startswith(('http://', 'https://')):
+            print(f"[RAG][ERROR] Invalid URL format: {url}")
+            raise ValueError(f"Invalid URL format in curriculum document: {url}")
+            
+        print(f"[RAG] Successfully retrieved URL for curriculum '{curriculum}': {url}")
+        return url
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Failed to fetch curriculum URL: {str(e)}")
+        raise
 
 async def fetch_chat_detail(chat_id):
     """Fetch and format the last 3 QA pairs of chat history."""
@@ -188,75 +215,164 @@ async def download_file(url, curriculum):
     return path
 
 async def vector_embedding(curriculum, file_url):
+    """Build FAISS index from PDF with proper encoding handling."""
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
-    # Initialize embeddings and resolve the FAISS index directory absolutely
+    
+    # URL validation and normalization
+    if file_url.startswith(('http://', 'https://')):
+        print(f"[RAG] Processing remote URL: {file_url}")
+        try:
+            # Test URL accessibility
+            async with aiohttp.ClientSession() as session:
+                async with session.head(file_url) as response:
+                    if response.status != 200:
+                        print(f"[RAG][ERROR] URL not accessible: {file_url} (status: {response.status})")
+                        raise ValueError(f"URL not accessible: {file_url}")
+        except Exception as e:
+            print(f"[RAG][ERROR] Failed to validate URL {file_url}: {str(e)}")
+            raise
+    else:
+        print(f"[RAG] Processing local file: {file_url}")
+        if not os.path.exists(file_url):
+            print(f"[RAG][ERROR] Local file not found: {file_url}")
+            raise FileNotFoundError(f"File not found: {file_url}")
+    
+    # Initialize embeddings
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
+    
     if await check_index_in_bucket(curriculum):
         try:
-            print(f"[RAG] vector_embedding: downloading FAISS index from bucket for {curriculum}")
+            print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
             await download_index_from_bucket(curriculum)
-            print(f"[RAG] vector_embedding: loading FAISS index from {idx_dir}")
+            print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
             return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
         except Exception as e:
             print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
-            # fallback to building the index from scratch
-            pass
-    # If file_url is a local file path, skip download; otherwise download from URL
-    if os.path.exists(file_url):
-        file_path = file_url
-    else:
-        file_path = await download_file(file_url, curriculum)
-    ext = FilePath(file_path).suffix.lower()
-    if ext == '.pdf':
-        loader = PyPDFLoader(file_path)
-    elif ext in ('.doc', '.docx'):
-        loader = Docx2txtLoader(file_path)
-    elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
-        loader = UnstructuredImageLoader(file_path)
-    else:
-        raise ValueError(f"Unsupported file type for RAG: {ext}")
-    docs = loader.load()
-    print(f"[RAG] vector_embedding: loaded {len(docs)} raw documents, snippet: {docs[0].page_content[:200]!r}")
-    splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
-    final_docs = splitter.split_documents(docs)
-    print(f"[RAG] vector_embedding: split into {len(final_docs)} chunks")
-    vectors = FAISS.from_documents(final_docs, embeddings)
-    vectors.save_local(idx_dir)
-    await upload_index_to_bucket(curriculum)
-    os.remove(file_path)
-    return vectors
+    
+    # Process the document
+    try:
+        if os.path.exists(file_url):
+            print(f"[RAG] Using existing local file: {file_url}")
+            file_path = file_url
+        else:
+            print(f"[RAG] Downloading file from URL: {file_url}")
+            file_path = await download_file(file_url, curriculum)
+            print(f"[RAG] File downloaded to: {file_path}")
+        
+        ext = FilePath(file_path).suffix.lower()
+        
+        # Load document with explicit encoding handling
+        if ext == '.pdf':
+            loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            # Ensure proper UTF-8 encoding for each document
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
+        elif ext in ('.doc', '.docx'):
+            loader = Docx2txtLoader(file_path)
+            docs = loader.load()
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
+        elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
+            loader = UnstructuredImageLoader(file_path)
+            docs = loader.load()
+            for doc in docs:
+                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
+        else:
+            raise ValueError(f"Unsupported file type for RAG: {ext}")
+        
+        print(f"[RAG] Loaded {len(docs)} documents with encoding: {sys.getdefaultencoding()}")
+        if docs:
+            print(f"[RAG] First doc sample (encoded): {docs[0].page_content[:200]!r}")
+        
+        splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
+        final_docs = splitter.split_documents(docs)
+        print(f"[RAG] Split into {len(final_docs)} chunks")
+        
+        print(f"[RAG] Creating FAISS index with explicit encoding")
+        vectors = FAISS.from_documents(final_docs, embeddings)
+        
+        # Save locally and to bucket
+        print(f"[RAG] Saving FAISS index to {idx_dir}")
+        vectors.save_local(idx_dir)
+        print(f"[RAG] Uploading FAISS index to bucket")
+        await upload_index_to_bucket(curriculum)
+        
+        # Clean up downloaded file if it was remote
+        if file_path != file_url:
+            print(f"[RAG] Cleaning up downloaded file: {file_path}")
+            os.remove(file_path)
+        
+        return vectors
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Failed to process document: {str(e)}")
+        raise
 
 async def get_or_load_vectors(curriculum, pdf_url):
-    """Optimized FAISS vector caching and retrieval.
-
-    Note: In-memory cache resets on server restart; indexes persisted to disk/GCS for reuse."""
+    """Optimized FAISS vector caching and retrieval with enhanced error handling."""
     print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
+    
+    # Check in-memory cache first
     if curriculum in curriculum_vectors:
-        print(f"[RAG] get_or_load_vectors: using cached vectors for {curriculum}")
+        print(f"[RAG] Using cached vectors for {curriculum}")
         return curriculum_vectors[curriculum]
-    # Use an absolute path for the FAISS index directory
+        
+    # Use absolute path for FAISS index directory
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     exists = os.path.exists(idx_dir) and os.path.exists(os.path.join(idx_dir, 'index.faiss'))
-    print(f"[RAG] get_or_load_vectors: idx_dir={idx_dir}, exists={exists}")
-    if exists:
-        try:
-            print(f"[RAG] get_or_load_vectors: loading FAISS index from disk for {curriculum}")
-            vectors = await asyncio.to_thread(
-                FAISS.load_local,
-                idx_dir,
-                OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
-                allow_dangerous_deserialization=True,
-            )
-        except Exception as e:
-            print(f"[RAG][ERROR] Failed to load FAISS index from {idx_dir}: {e}")
-            vectors = await vector_embedding(curriculum, pdf_url)
-    else:
+    print(f"[RAG] Local FAISS index check - dir={idx_dir}, exists={exists}")
+    
+    try:
+        # Try loading from local disk first
+        if exists:
+            print(f"[RAG] Loading FAISS index from disk for {curriculum}")
+            try:
+                vectors = await asyncio.to_thread(
+                    FAISS.load_local,
+                    idx_dir,
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    allow_dangerous_deserialization=True,
+                )
+                print(f"[RAG] Successfully loaded local FAISS index for {curriculum}")
+                curriculum_vectors[curriculum] = vectors
+                return vectors
+            except Exception as e:
+                print(f"[RAG][ERROR] Failed to load local FAISS index: {str(e)}")
+                # Fall through to rebuilding the index
+        
+        # If local load failed or doesn't exist, check Firebase Storage
+        print(f"[RAG] Checking Firebase Storage for FAISS index: {curriculum}")
+        if await check_index_in_bucket(curriculum):
+            try:
+                print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
+                await download_index_from_bucket(curriculum)
+                vectors = await asyncio.to_thread(
+                    FAISS.load_local,
+                    idx_dir,
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    allow_dangerous_deserialization=True,
+                )
+                print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
+                curriculum_vectors[curriculum] = vectors
+                return vectors
+            except Exception as e:
+                print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
+                # Fall through to rebuilding the index
+        
+        # If all else fails, rebuild the index from PDF
+        print(f"[RAG] Building new FAISS index for {curriculum} from {pdf_url}")
         vectors = await vector_embedding(curriculum, pdf_url)
-    curriculum_vectors[curriculum] = vectors
-    return vectors
+        print(f"[RAG] Successfully built new FAISS index for {curriculum}")
+        curriculum_vectors[curriculum] = vectors
+        return vectors
+        
+    except Exception as e:
+        print(f"[RAG][ERROR] Critical error in get_or_load_vectors: {str(e)}")
+        raise ValueError(f"Failed to load or create vectors for curriculum {curriculum}: {str(e)}")
 
 async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k: int = 10):
     """Fetch and trim top-k docs by token count."""
@@ -280,14 +396,43 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
 async def update_chat_history_speech(user_id, question, answer):
     """
     Append QA pair to Firestore speech history.
-
-    NOTE: question and answer may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; store raw Python str.
+    Store Unicode text (e.g. Arabic) with proper encoding handling.
     """
-    ref = db.collection('history_chat_backend_speech').document(user_id)
-    doc = ref.get()
-    hist = doc.to_dict().get('history', []) if doc.exists else []
-    hist.append({'question': question, 'answer': answer})
-    ref.set({'history': hist})
+    try:
+        # Log the input data with encoding info
+        print(f"[UNICODE DEBUG] Question type: {type(question)}, encoding: {sys.getdefaultencoding()}")
+        print(f"[UNICODE DEBUG] Answer type: {type(answer)}, encoding: {sys.getdefaultencoding()}")
+        
+        # Ensure proper UTF-8 encoding
+        if isinstance(question, str):
+            question = question.encode('utf-8').decode('utf-8')
+        if isinstance(answer, str):
+            answer = answer.encode('utf-8').decode('utf-8')
+        
+        # Store in Firestore
+        ref = db.collection('history_chat_backend_speech').document(user_id)
+        doc = ref.get()
+        hist = doc.to_dict().get('history', []) if doc.exists else []
+        
+        # Add new entry with explicit encoding
+        hist.append({
+            'question': question,
+            'answer': answer,
+            'timestamp': firestore.SERVER_TIMESTAMP,
+            'encoding': 'utf-8'
+        })
+        
+        # Update Firestore
+        ref.set({'history': hist})
+        
+        print(f"[UNICODE DEBUG] Successfully saved entry with encoding info")
+        return True
+        
+    except Exception as e:
+        print(f"[UNICODE ERROR] Failed to save history: {str(e)}")
+        print(f"[UNICODE ERROR] Question sample: {question[:50] if question else None}")
+        print(f"[UNICODE ERROR] Answer sample: {answer[:50] if answer else None}")
+        raise
 
 # --- Matplotlib for graphing ---
 import matplotlib
@@ -366,18 +511,24 @@ app = FastAPI()
 # --- CORS middleware setup ---
 from fastapi.middleware.cors import CORSMiddleware
 
-"""
 # CORS middleware setup
-# Use the ALLOW_ORIGINS env var (comma-separated) to whitelist your frontend domains,
-# or '*' to allow all origins (not recommended with credentials enabled).
-"""
-allow_origins = os.getenv("ALLOW_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=[
+        "https://ai-school-postsse.web.app",    # Production frontend
+        "https://ai-assistant.myddns.me",       # No-IP domain
+        "http://localhost:3000",                # Local development
+        "http://localhost:8000",                # Local testing
+        "*"                                     # Allow all origins during development
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],                        # Allow all methods
+    allow_headers=["*"],                        # Allow all headers
+    expose_headers=[
+        "Content-Length",
+        "Content-Range"
+    ],
+    max_age=3600                               # Cache preflight requests for 1 hour
 )
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
@@ -390,9 +541,9 @@ app.mount("/graphs", StaticFiles(directory=GRAPHS_DIR), name="graphs")
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Base URL where uploaded files (PDF, image, audio) will be served
-UPLOADS_BASE_URL = "http://51.20.81.94:8000/uploads"
+UPLOADS_BASE_URL = "https://ai-assistant.myddns.me:8443/uploads"
 # Base URL where generated graphs will be served
-GRAPHS_BASE_URL = "http://51.20.81.94:8000/graphs"
+GRAPHS_BASE_URL = "https://ai-assistant.myddns.me:8443/graphs"
 
 def local_path_from_image_url(image_url):
     """
@@ -766,7 +917,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     """
     Save uploaded PDF and return its static URL.
     Uploaded files are served from:
-      http://51.20.81.94:8000/uploads/{filename}.pdf
+      https://ai-assistant.myddns.me:8443/uploads/{filename}.pdf
     where {filename} is the actual filename of the uploaded PDF.
     """
     filename = file.filename or f"{uuid.uuid4()}.pdf"
@@ -785,7 +936,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     """
     Save uploaded image and return its static URL.
     Uploaded files are served from:
-      http://51.20.81.94:8000/uploads/{filename}.png
+      https://ai-assistant.myddns.me:8443/uploads/{filename}.png
     where {filename} is the actual filename of the uploaded image.
     """
     filename = file.filename or f"{uuid.uuid4()}.png"
@@ -2414,8 +2565,13 @@ async def add_chat_history(entry: ChatHistoryEntry):
     """
     Append a chat history entry to Firestore.
 
-    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
+    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; 
+    save directly as Python str. Firestore handles Unicode automatically.
     """
+    # Log the input data to verify it contains the correct Unicode characters
+    print(f"[UNICODE DEBUG] Saving to {entry.type} collection - Content sample: {entry.content[:50]}")
+    print(f"[UNICODE DEBUG] Content type: {type(entry.content)}")
+    
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
@@ -2426,10 +2582,11 @@ async def add_chat_history(entry: ChatHistoryEntry):
     if not collection_name:
         raise HTTPException(status_code=400, detail="Invalid type value")
 
+    # Create entry with raw string values - do not encode or process the strings in any way
     new_entry = {
         "id": entry.id,
         "role": entry.role,
-        "content": entry.content,
+        "content": entry.content,  # Store as-is without any encoding
         "audiourl": entry.audiourl,
         "imageselected": entry.imageselected,
     }
@@ -2437,9 +2594,15 @@ async def add_chat_history(entry: ChatHistoryEntry):
     doc_ref = db.collection(collection_name).document(entry.chat_id)
 
     try:
+        # Firestore handles Unicode automatically - do not encode or process the strings
         doc_ref.update({"history": firestore.ArrayUnion([new_entry])})
+        
+        # Log success message
+        print(f"[UNICODE DEBUG] Successfully saved entry to {collection_name} for chat {entry.chat_id}")
+        
         return {"message": f"Entry added to {collection_name} successfully"}
     except Exception as e:
+        print(f"[UNICODE ERROR] Failed to save to {collection_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2537,8 +2700,351 @@ async def check_gcp_faiss(curriculum_id: str):
             "path": gcp_path if 'gcp_path' in locals() else None
         }
 
+@app.get("/check-backend-dirs")
+async def check_backend_dirs():
+    """Check if critical backend directories exist and are writable."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    dirs_to_check = ['uploads', 'faiss', 'graphs', 'audio_sents']
+    
+    results = {}
+    for dir_name in dirs_to_check:
+        dir_path = os.path.join(base_dir, dir_name)
+        exists = os.path.exists(dir_path)
+        is_dir = os.path.isdir(dir_path) if exists else False
+        is_writable = os.access(dir_path, os.W_OK) if exists else False
+        
+        # Try to list contents if directory exists
+        contents = []
+        if exists and is_dir:
+            try:
+                contents = os.listdir(dir_path)[:5]  # List up to 5 items
+            except Exception as e:
+                contents = [f"Error listing contents: {str(e)}"]
+        
+        results[dir_name] = {
+            "exists": exists,
+            "is_directory": is_dir,
+            "is_writable": is_writable,
+            "path": dir_path,
+            "sample_contents": contents
+        }
+    
+    return {
+        "server_url": "https://ai-assistant.myddns.me:8443",
+        "base_directory": base_dir,
+        "directories": results
+    }
+
+@app.get("/check-faiss-content/{curriculum_id}")
+async def check_faiss_content(curriculum_id: str):
+    """Check the content of a FAISS index to verify it's working correctly."""
+    try:
+        # Initialize embeddings
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Get the FAISS index path
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum_id}')
+        
+        if not os.path.exists(idx_dir):
+            return {
+                "status": "error",
+                "message": f"FAISS index directory not found: {idx_dir}",
+                "curriculum_id": curriculum_id
+            }
+            
+        # Try to load the index
+        try:
+            vectors = FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+            
+            # Test search with a simple query
+            test_query = "introduction"
+            docs = vectors.similarity_search(test_query, k=2)
+            
+            # Extract sample content
+            samples = []
+            for doc in docs:
+                samples.append({
+                    "content": doc.page_content[:200] + "...",
+                    "metadata": doc.metadata
+                })
+            
+            return {
+                "status": "success",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir,
+                "vector_count": vectors.index.ntotal if hasattr(vectors, 'index') else None,
+                "sample_query": test_query,
+                "sample_results": samples
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to load/query FAISS index: {str(e)}",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Top-level error: {str(e)}",
+            "curriculum_id": curriculum_id
+        }
+
 @app.get("/")
-def root():
+async def root():
+    """Root endpoint with links to available tools."""
     return HTMLResponse("""
-    <h2>Go to <a href="/frontend/index.html">/frontend/index.html</a> to use the full app UI.</h2>
+    <h2>AI Assistant API Tools</h2>
+    <ul>
+        <li><a href="/frontend/index.html">Frontend UI</a></li>
+        <li><a href="/check-backend-dirs">Check Backend Directories</a></li>
+        <li><a href="/check-faiss-content/Dcul12T4b7uTG5xGqtEp">Check FAISS Index Content (Example)</a></li>
+    </ul>
     """)
+
+@app.options("/{path:path}")
+async def options_route(path: str):
+    """Handle OPTIONS requests for CORS preflight."""
+    response = JSONResponse(content={"status": "ok"})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+@app.post("/test-arabic-storage")
+async def test_arabic_storage(request: Request):
+    """
+    Test endpoint to verify that Arabic text is stored and retrieved correctly.
+    
+    POST body should be JSON with:
+    {
+        "user_id": "test_user_id",
+        "arabic_text": "النص العربي للاختبار"
+    }
+    """
+    try:
+        data = await request.json()
+        user_id = data.get("user_id", f"test_user_{uuid.uuid4().hex[:8]}")
+        arabic_text = data.get("arabic_text", "هذا نص عربي للاختبار")
+        
+        # Log the input
+        print(f"[ARABIC TEST] Input text: {arabic_text}")
+        print(f"[ARABIC TEST] Input text type: {type(arabic_text)}")
+        
+        # Create a test document with the Arabic text
+        test_doc_id = f"arabic_test_{uuid.uuid4().hex[:8]}"
+        test_ref = db.collection("arabic_test_collection").document(test_doc_id)
+        
+        # Store the text directly
+        test_ref.set({
+            "user_id": user_id,
+            "arabic_text": arabic_text,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+        
+        # Retrieve the document to verify
+        doc = test_ref.get()
+        retrieved_data = doc.to_dict()
+        retrieved_text = retrieved_data.get("arabic_text", "")
+        
+        # Log the retrieved text
+        print(f"[ARABIC TEST] Retrieved text: {retrieved_text}")
+        print(f"[ARABIC TEST] Retrieved text type: {type(retrieved_text)}")
+        
+        # Check if the text matches
+        is_match = arabic_text == retrieved_text
+        
+        # Return the results
+        return {
+            "success": True,
+            "original_text": arabic_text,
+            "retrieved_text": retrieved_text,
+            "is_match": is_match,
+            "test_doc_id": test_doc_id
+        }
+    except Exception as e:
+        print(f"[ARABIC TEST ERROR] {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+@app.get("/verify-arabic-data/{collection}/{document_id}")
+async def verify_arabic_data(collection: str, document_id: str):
+    """
+    Verify that Arabic data in a specific document is stored correctly.
+    
+    Parameters:
+    - collection: The Firestore collection name (e.g., "chat_details_ar", "history_chat_backend_speech")
+    - document_id: The document ID to check
+    
+    Returns the document data with any Arabic text found.
+    """
+    try:
+        # Get the document
+        doc_ref = db.collection(collection).document(document_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return {
+                "success": False,
+                "error": f"Document {document_id} not found in collection {collection}"
+            }
+        
+        data = doc.to_dict()
+        
+        # For chat history collections, extract the history array
+        if "history" in data:
+            # Get the last 5 entries or fewer if there are less
+            history = data.get("history", [])
+            recent_entries = history[-5:] if len(history) > 5 else history
+            
+            # Extract content from each entry
+            entries_with_content = []
+            for entry in recent_entries:
+                if isinstance(entry, dict) and "content" in entry:
+                    entries_with_content.append({
+                        "role": entry.get("role", "unknown"),
+                        "content": entry.get("content", ""),
+                        "content_type": type(entry.get("content", "")).__name__
+                    })
+            
+            return {
+                "success": True,
+                "collection": collection,
+                "document_id": document_id,
+                "recent_entries": entries_with_content,
+                "total_entries": len(history)
+            }
+        
+        # For speech history collection
+        elif collection == "history_chat_backend_speech":
+            history = data.get("history", [])
+            recent_entries = history[-5:] if len(history) > 5 else history
+            
+            entries_with_qa = []
+            for entry in recent_entries:
+                if isinstance(entry, dict):
+                    entries_with_qa.append({
+                        "question": entry.get("question", ""),
+                        "question_type": type(entry.get("question", "")).__name__,
+                        "answer": entry.get("answer", ""),
+                        "answer_type": type(entry.get("answer", "")).__name__
+                    })
+            
+            return {
+                "success": True,
+                "collection": collection,
+                "document_id": document_id,
+                "recent_entries": entries_with_qa,
+                "total_entries": len(history)
+            }
+        
+        # For other collections, return the raw data
+        return {
+            "success": True,
+            "collection": collection,
+            "document_id": document_id,
+            "data": data
+        }
+    except Exception as e:
+        print(f"[VERIFY ERROR] {str(e)}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+if __name__ == "__main__":
+    import uvicorn
+    print("Starting server with HTTPS on https://0.0.0.0:8443")
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8443,
+        ssl_keyfile="/etc/letsencrypt/live/ai-assistant.myddns.me/privkey.pem",
+        ssl_certfile="/etc/letsencrypt/live/ai-assistant.myddns.me/fullchain.pem"
+    )
+def fix_text_encoding(text: str) -> str:
+    """Try to fix incorrectly encoded text, especially Arabic."""
+    try:
+        # Try to fix double-encoded text
+        return text.encode('latin1').decode('utf-8')
+    except:
+        try:
+            # Try direct UTF-8 decoding
+            return text.encode('utf-8').decode('utf-8')
+        except:
+            # Return original if both attempts fail
+            return text
+
+@app.get("/check-faiss-content/{curriculum_id}")
+async def check_faiss_content(curriculum_id: str):
+    """Check the content of a FAISS index to verify it's working correctly."""
+    try:
+        # Initialize embeddings
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Get the FAISS index path
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum_id}')
+        
+        if not os.path.exists(idx_dir):
+            return {
+                "status": "error",
+                "message": f"FAISS index directory not found: {idx_dir}",
+                "curriculum_id": curriculum_id
+            }
+            
+        # Try to load the index
+        try:
+            vectors = FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+            
+            # Test searches with different queries
+            test_queries = ["introduction", "مقدمة", "الرياضيات", "mathematics"]
+            all_samples = {}
+            
+            for query in test_queries:
+                docs = vectors.similarity_search(query, k=2)
+                samples = []
+                for doc in docs:
+                    # Try to fix encoding
+                    content = fix_text_encoding(doc.page_content)
+                    
+                    samples.append({
+                        "content": content[:200] + "...",
+                        "content_bytes": content[:200].encode('utf-8').hex(),
+                        "metadata": doc.metadata
+                    })
+                all_samples[query] = samples
+            
+            return {
+                "status": "success",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir,
+                "vector_count": vectors.index.ntotal if hasattr(vectors, 'index') else None,
+                "sample_results": all_samples,
+                "encoding_info": {
+                    "python_default": sys.getdefaultencoding(),
+                    "file_system": sys.getfilesystemencoding()
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to load/query FAISS index: {str(e)}",
+                "curriculum_id": curriculum_id,
+                "index_path": idx_dir
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Top-level error: {str(e)}",
+            "curriculum_id": curriculum_id
+        }
+
+@app.get("/test-cors")
+async def test_cors():
+    """Test endpoint for CORS."""
+    return {"message": "CORS is working!"}
