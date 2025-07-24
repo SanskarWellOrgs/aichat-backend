@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Literal
 from google.cloud import firestore
+from datetime import datetime
 
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
@@ -2763,6 +2764,55 @@ async def add_chat_history(entry: ChatHistoryEntry):
         "avatar": "avatarchatdetails",
         "normal": "chat_detail",
     }
+    
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
+    
+    try:
+        # First decode if the input is somehow corrupted
+        content = decode_arabic_text(entry.content)
+        
+        # Get current timestamp
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Create entry with decoded content
+        entry_dict = {
+            "id": entry.id,
+            "role": entry.role,
+            "content": content,
+            "audiourl": entry.audiourl,
+            "imageselected": entry.imageselected,
+            "timestamp": current_time
+        }
+        
+        # Get existing history or create new
+        doc_ref = db.collection(collection_name).document(entry.chat_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            history = data.get("history", [])
+            history.append(entry_dict)
+            doc_ref.update({
+                "history": history,
+                "last_updated": current_time
+            })
+        else:
+            doc_ref.set({
+                "history": [entry_dict],
+                "created_at": current_time
+            })
+            
+        return JSONResponse(
+            content={"status": "success", "message": "Chat history updated"},
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to store chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     
     collection_name = type_mapping.get(entry.type)
     if not collection_name:
