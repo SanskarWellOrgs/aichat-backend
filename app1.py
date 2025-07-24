@@ -552,15 +552,69 @@ import shutil
 
 # --- System-level Math Instructions ---
 SYSTEM_MATH_INSTRUCTION = """
-When writing mathematical expressions:
-1. Always use LaTeX syntax with \\frac{}{} for fractions
-2. Wrap ALL equations in $$....$$ for block rendering
-3. For Arabic text inside equations, wrap it in \\text{} like \\text{إذا كان س < ٣}
-4. Examples:
-   - Simple fraction: $$\\frac{1}{2}$$
-   - Arabic equation: $$\\frac{س + ١}{ص - ٢} = \\text{حيث} \\text{س} \\neq 0$$
-   - Complex fraction: $$\\frac{\\text{البسط}}{\\text{المقام}}$$
-5. Keep Arabic words connected and readable using \\text{}
+CRITICAL: ALL mathematical expressions MUST follow these LaTeX formatting rules without exception:
+
+1. EVERY mathematical expression MUST be wrapped in $$...$$, no exceptions
+   - Correct:   $$x + y = 5$$
+   - Incorrect: x + y = 5
+
+2. ALL fractions MUST use \\frac{numerator}{denominator}:
+   - Correct:   $$\\frac{x+1}{y-2}$$
+   - Incorrect: (x+1)/(y-2)
+   - Incorrect: x+1/y-2
+
+3. Arabic text within equations MUST be wrapped in \\text{}:
+   - Correct:   $$f(x) = \\begin{cases}
+                  2x + 1 & \\text{إذا كان } x < 3 \\
+                  -x + 5 & \\text{إذا كان } x \\geq 3
+                \\end{cases}$$
+   - Incorrect: f(x) = 2x + 1 إذا كان x < 3
+
+4. Use proper mathematical notation:
+   - Variables: Use x, y, z (not س, ص)
+   - Functions: f(x), g(x)
+   - Powers: x^2, x^n
+   - Roots: \\sqrt{x}, \\sqrt[n]{x}
+
+5. Common mathematical structures:
+   - Limits: $$\\lim_{x \\to ∞} \\frac{1}{x} = 0$$
+   - Integrals: $$\\int_{a}^{b} f(x)dx$$
+   - Summations: $$\\sum_{i=1}^{n} i^2$$
+   - Matrices: $$\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}$$
+
+6. For piecewise functions:
+   $$f(x) = \\begin{cases}
+      expression_1 & \\text{الشرط الأول} \\
+      expression_2 & \\text{الشرط الثاني}
+   \\end{cases}$$
+
+7. For systems of equations:
+   $$\\begin{align}
+   3x + 2y &= 8 \\
+   x - y &= 1
+   \\end{align}$$
+
+EXAMPLES OF COMPLETE RESPONSES:
+
+1. For basic algebra:
+"لحل المعادلة التالية:"
+$$2x + \\frac{x-1}{3} = 5$$
+
+2. For calculus:
+"لنجد المشتقة:"
+$$\\frac{d}{dx}\\left(\\frac{x^2 + 1}{x-2}\\right) = \\frac{2x(x-2) - (x^2+1)}{(x-2)^2}$$
+
+3. For trigonometry:
+"العلاقة المثلثية هي:"
+$$\\sin^2 θ + \\cos^2 θ = 1 \\text{ حيث } θ \\text{ هي الزاوية}$$
+
+STRICT ENFORCEMENT:
+- Never use plain text for mathematical expressions
+- Always wrap equations in $$...$$
+- Always use \\text{} for Arabic within equations
+- Use proper LaTeX commands for all mathematical notation
+
+If you're writing any mathematical content, it MUST follow these rules without exception.
 """
 
 
@@ -1419,16 +1473,16 @@ async def stream_answer(
     # ----- PROMPT CHOOSING LOGIC -----
     # Fill in your actual prompts here:
     teacher_prompt = """
-    - STRICT REQUIREMENT: If your answer contains a mathematical fraction, ALWAYS format it so that the numerator is written on the line above, the denominator on the line below, with a straight line (—) in between. For example:
-   x1 + x2
-   ——————
-      2
-- DO NOT use LaTeX (\\frac, \\left, \\right) or any code formatting. Only display the stacked fraction in plain text as above.
-- AND FOR ARABIC - - متطلب صارم: إذا كانت الإجابة تحتوي على كسر رياضي، يجب دائمًا كتابة البسط في السطر الأعلى، والمقام في السطر الأسفل، مع خط أفقي بينهما، مثل:
-   ع1 + ع2
-   ——————
-      2
-- لا تستخدم LaTeX مثل \\frac أو أي تنسيق برمجي. فقط اعرض الكسر بهذه الطريقة النصية البسيطة.
+    - STRICT REQUIREMENT: All mathematical equations must be formatted in LaTeX and wrapped in $$...$$. For example:
+      $$y = x^3 + 4$$
+    - For fractions, use \frac{numerator}{denominator}. For example:
+      $$\frac{2x - 5}{x + 3}$$
+    - Arabic text inside equations should be wrapped in \text{}. For example:
+      $$f(x) = \begin{cases}
+      2x + 1 & \text{إذا كان } x < 3 \\
+      -x + 5 & \text{إذا كان } x \geq 3
+      \end{cases}$$
+    - Use proper variable names (x, y) and standard mathematical notation.
 
 ****STRICT REQUIREMENTS****
 - BEFORE RESPONDING: CAREFULLY READ PROMPT DESCRIPTION AND UNDERSTAND USER QUESTION {input}
@@ -1627,16 +1681,16 @@ Always provide meaningful answers aligned with curriculum and enhanced with rele
 
 
     student_prompt_1 = """
-- STRICT REQUIREMENT: If your answer contains a mathematical fraction, ALWAYS format it so that the numerator is written on the line above, the denominator on the line below, with a straight line (—) in between. For example:
-   x1 + x2
-   ——————
-      2
-- DO NOT use LaTeX (\\frac, \\left, \\right) or any code formatting. Only display the stacked fraction in plain text as above.
-- AND FOR ARABIC - - متطلب صارم: إذا كانت الإجابة تحتوي على كسر رياضي، يجب دائمًا كتابة البسط في السطر الأعلى، والمقام في السطر الأسفل، مع خط أفقي بينهما، مثل:
-   ع1 + ع2
-   ——————
-      2
-- لا تستخدم LaTeX مثل \\frac أو أي تنسيق برمجي. فقط اعرض الكسر بهذه الطريقة النصية البسيطة.
+    - STRICT REQUIREMENT: All mathematical equations must be formatted in LaTeX and wrapped in $$...$$. For example:
+      $$y = 3x^2 - 2$$
+    - For fractions, use \\frac{numerator}{denominator}. For example:
+      $$\\frac{2x - 5}{x + 3}$$
+    - Arabic text inside equations should be wrapped in \\text{}. For example:
+      $$f(x) = \\begin{cases}
+      2x + 1 & \\text{إذا كان } x < 3 \\
+      -x + 5 & \\text{إذا كان } x \\geq 3
+      \\end{cases}$$
+    - Use proper variable names (x, y) and standard mathematical notation.
 
 
 
@@ -2149,16 +2203,16 @@ No other responses are allowed.
 
 
     student_prompt = """
-- STRICT REQUIREMENT: If your answer contains a mathematical fraction, ALWAYS format it so that the numerator is written on the line above, the denominator on the line below, with a straight line (—) in between. For example:
-   x1 + x2
-   ——————
-      2
-- DO NOT use LaTeX (\\frac, \\left, \\right) or any code formatting. Only display the stacked fraction in plain text as above.
-- AND FOR ARABIC - - متطلب صارم: إذا كانت الإجابة تحتوي على كسر رياضي، يجب دائمًا كتابة البسط في السطر الأعلى، والمقام في السطر الأسفل، مع خط أفقي بينهما، مثل:
-   ع1 + ع2
-   ——————
-      2
-- لا تستخدم LaTeX مثل \\frac أو أي تنسيق برمجي. فقط اعرض الكسر بهذه الطريقة النصية البسيطة.
+    - STRICT REQUIREMENT: All mathematical equations must be formatted in LaTeX and wrapped in $$...$$. For example:
+      $$y = a + b\\cos(x)$$
+    - For fractions, use \\frac{numerator}{denominator}. For example:
+      $$\\frac{x^3 + 4}{1}$$
+    - Arabic text inside equations should be wrapped in \\text{}. For example:
+      $$f(x) = \\begin{cases}
+      2x + 1 & \\text{إذا كان } x < 3 \\
+      -x + 5 & \\text{إذا كان } x \\geq 3
+      \\end{cases}$$
+    - Use proper variable names (x, y) and standard mathematical notation.
 
 
     ****STRICT REQUIREMENT**** :- ****BEFORE RESPOND CAREFULLY READ PROMPT DESCRIPTION AND UNDERSTAND USER QUESTION {input} THEN RESPOND BASED ON CRITERIA OF PROMPT ALSO ```***FINAL RESPONSE OF BOT WILL BE DETAILED RESPONSE WHICH IS OF ATLEAST 2 PARAGRAPHS(***DONT INCLUDE GENERAL STRICT*** *CURRICULUM BASED DETAILED*) (IF QUESTION IS RELATED TO CURRICULUM CONTEXT)***``` ***                                                  
