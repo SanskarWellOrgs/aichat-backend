@@ -215,27 +215,8 @@ async def download_file(url, curriculum):
     return path
 
 async def vector_embedding(curriculum, file_url):
-    """Build FAISS index from PDF with proper encoding handling."""
+    """Build FAISS index from PDF."""
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
-    
-    # URL validation and normalization
-    if file_url.startswith(('http://', 'https://')):
-        print(f"[RAG] Processing remote URL: {file_url}")
-        try:
-            # Test URL accessibility
-            async with aiohttp.ClientSession() as session:
-                async with session.head(file_url) as response:
-                    if response.status != 200:
-                        print(f"[RAG][ERROR] URL not accessible: {file_url} (status: {response.status})")
-                        raise ValueError(f"URL not accessible: {file_url}")
-        except Exception as e:
-            print(f"[RAG][ERROR] Failed to validate URL {file_url}: {str(e)}")
-            raise
-    else:
-        print(f"[RAG] Processing local file: {file_url}")
-        if not os.path.exists(file_url):
-            print(f"[RAG][ERROR] Local file not found: {file_url}")
-            raise FileNotFoundError(f"File not found: {file_url}")
     
     # Initialize embeddings
     embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
@@ -263,35 +244,26 @@ async def vector_embedding(curriculum, file_url):
         
         ext = FilePath(file_path).suffix.lower()
         
-        # Load document with explicit encoding handling
+        # Load document without explicit encoding handling
         if ext == '.pdf':
             loader = PyPDFLoader(file_path)
-            docs = loader.load()
-            # Ensure proper UTF-8 encoding for each document
-            for doc in docs:
-                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         elif ext in ('.doc', '.docx'):
             loader = Docx2txtLoader(file_path)
-            docs = loader.load()
-            for doc in docs:
-                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         elif ext in ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff'):
             loader = UnstructuredImageLoader(file_path)
-            docs = loader.load()
-            for doc in docs:
-                doc.page_content = doc.page_content.encode('utf-8').decode('utf-8')
         else:
             raise ValueError(f"Unsupported file type for RAG: {ext}")
         
-        print(f"[RAG] Loaded {len(docs)} documents with encoding: {sys.getdefaultencoding()}")
+        docs = loader.load()
+        print(f"[RAG] Loaded {len(docs)} documents")
         if docs:
-            print(f"[RAG] First doc sample (encoded): {docs[0].page_content[:200]!r}")
+            print(f"[RAG] First doc sample: {docs[0].page_content[:200]!r}")
         
         splitter = RecursiveCharacterTextSplitter(chunk_size=MAX_TOKENS_PER_CHUNK, chunk_overlap=0)
         final_docs = splitter.split_documents(docs)
         print(f"[RAG] Split into {len(final_docs)} chunks")
         
-        print(f"[RAG] Creating FAISS index with explicit encoding")
+        print(f"[RAG] Creating FAISS index")
         vectors = FAISS.from_documents(final_docs, embeddings)
         
         # Save locally and to bucket
@@ -396,42 +368,30 @@ async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k:
 async def update_chat_history_speech(user_id, question, answer):
     """
     Append QA pair to Firestore speech history.
-    Store Unicode text (e.g. Arabic) with proper encoding handling.
+
+    NOTE: question and answer may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; store raw Python str.
     """
     try:
-        # Log the input data with encoding info
-        print(f"[UNICODE DEBUG] Question type: {type(question)}, encoding: {sys.getdefaultencoding()}")
-        print(f"[UNICODE DEBUG] Answer type: {type(answer)}, encoding: {sys.getdefaultencoding()}")
-        
-        # Ensure proper UTF-8 encoding
-        if isinstance(question, str):
-            question = question.encode('utf-8').decode('utf-8')
-        if isinstance(answer, str):
-            answer = answer.encode('utf-8').decode('utf-8')
-        
         # Store in Firestore
         ref = db.collection('history_chat_backend_speech').document(user_id)
         doc = ref.get()
         hist = doc.to_dict().get('history', []) if doc.exists else []
         
-        # Add new entry with explicit encoding
+        # Add new entry without re-encoding
         hist.append({
             'question': question,
             'answer': answer,
-            'timestamp': firestore.SERVER_TIMESTAMP,
-            'encoding': 'utf-8'
+            'timestamp': firestore.SERVER_TIMESTAMP
         })
         
         # Update Firestore
         ref.set({'history': hist})
         
-        print(f"[UNICODE DEBUG] Successfully saved entry with encoding info")
+        print(f"[INFO] Successfully saved chat history for user {user_id}")
         return True
         
     except Exception as e:
-        print(f"[UNICODE ERROR] Failed to save history: {str(e)}")
-        print(f"[UNICODE ERROR] Question sample: {question[:50] if question else None}")
-        print(f"[UNICODE ERROR] Answer sample: {answer[:50] if answer else None}")
+        print(f"[ERROR] Failed to save history: {str(e)}")
         raise
 
 # --- Matplotlib for graphing ---
@@ -2565,13 +2525,8 @@ async def add_chat_history(entry: ChatHistoryEntry):
     """
     Append a chat history entry to Firestore.
 
-    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; 
-    save directly as Python str. Firestore handles Unicode automatically.
+    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
     """
-    # Log the input data to verify it contains the correct Unicode characters
-    print(f"[UNICODE DEBUG] Saving to {entry.type} collection - Content sample: {entry.content[:50]}")
-    print(f"[UNICODE DEBUG] Content type: {type(entry.content)}")
-    
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
@@ -2582,11 +2537,10 @@ async def add_chat_history(entry: ChatHistoryEntry):
     if not collection_name:
         raise HTTPException(status_code=400, detail="Invalid type value")
 
-    # Create entry with raw string values - do not encode or process the strings in any way
     new_entry = {
         "id": entry.id,
         "role": entry.role,
-        "content": entry.content,  # Store as-is without any encoding
+        "content": entry.content,
         "audiourl": entry.audiourl,
         "imageselected": entry.imageselected,
     }
@@ -2594,15 +2548,9 @@ async def add_chat_history(entry: ChatHistoryEntry):
     doc_ref = db.collection(collection_name).document(entry.chat_id)
 
     try:
-        # Firestore handles Unicode automatically - do not encode or process the strings
         doc_ref.update({"history": firestore.ArrayUnion([new_entry])})
-        
-        # Log success message
-        print(f"[UNICODE DEBUG] Successfully saved entry to {collection_name} for chat {entry.chat_id}")
-        
         return {"message": f"Entry added to {collection_name} successfully"}
     except Exception as e:
-        print(f"[UNICODE ERROR] Failed to save to {collection_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
