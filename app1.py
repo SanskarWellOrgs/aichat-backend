@@ -346,7 +346,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
         print(f"[RAG][ERROR] Critical error in get_or_load_vectors: {str(e)}")
         raise ValueError(f"Failed to load or create vectors for curriculum {curriculum}: {str(e)}")
 
-async def retrieve_documents(vectorstore, query: str, max_tokens: int = 7000, k: int = 10):
+async def retrieve_documents(vectorstore, query: str, max_tokens: int = 30000, k: int = 10):
     """Fetch and trim top-k docs by token count."""
     print(f"[DEBUG] retrieve_documents called with query: '{query}', k={k}")
     
