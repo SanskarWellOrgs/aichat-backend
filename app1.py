@@ -43,6 +43,38 @@ except ImportError as e:
         "Missing 'firebase_admin' dependency: please install via `pip install firebase-admin google-cloud-firestore google-cloud-storage`"
     ) from e
 import shutil
+async def generate_complete_tts(text: str, language: str) -> str:
+    """Generate complete TTS audio file and return URL"""
+    try:
+        # Determine voice based on language
+        if language.lower().startswith('ar'):
+            voice = "ar-SA-ZariyahNeural"
+        else:
+            voice = "en-US-AriaNeural"
+        
+        # Clean text for TTS
+        clean_text = sanitize_for_tts(text)
+        if not clean_text.strip():
+            return ""
+        
+        # Generate unique filename
+        timestamp = int(time.time() * 1000)
+        filename = f"tts_{timestamp}.mp3"
+        filepath = os.path.join(AUDIO_DIR, filename)
+        
+        # Generate TTS
+        communicate = edge_tts.Communicate(clean_text, voice)
+        await communicate.save(filepath)
+        
+        # Return URL for the audio file
+        audio_url = f"https://ai-assistant.myddns.me:8443/audio/{filename}"
+        print(f"[TTS] Generated audio: {audio_url}")
+        return audio_url
+        
+    except Exception as e:
+        print(f"[TTS ERROR] Failed to generate audio: {e}")
+        return ""
+
 import time
 import tempfile
 from pathlib import Path as FilePath
@@ -2414,6 +2446,20 @@ Use it **properly for follow-up answers based on contex**.
                 await update_chat_history_speech(user_id, question, answer_so_far)
             except Exception as e:
                 print("[ERROR] Failed to update chat history:", str(e))
+            
+            # Generate complete TTS audio file for the full response
+            try:
+                if answer_so_far.strip():
+                    print(f"[TTS] Generating complete audio for response ({len(answer_so_far)} chars)")
+                    audio_url = await generate_complete_tts(answer_so_far, language)
+                    if audio_url:
+                        yield f"data: {json.dumps({'type': 'complete_audio', 'audio_url': audio_url, 'text': answer_so_far})}\n\n"
+                        print(f"[TTS] Complete audio generated: {audio_url}")
+                    else:
+                        print("[TTS] Failed to generate complete audio")
+            except Exception as e:
+                print(f"[TTS ERROR] Failed to generate complete audio: {e}")
+                
         except Exception as ex:
             print("[FATAL ERROR in event_stream]", str(ex))
             # In case of fatal errors, propagate an error event before completing
@@ -3019,3 +3065,20 @@ async def check_faiss_content(curriculum_id: str):
 async def test_cors():
     """Test endpoint for CORS."""
     return {"message": "CORS is working!"}
+
+@app.get("/test-tts")
+async def test_tts(text: str = Query("Hello, this is a test"), language: str = Query("en")):
+    """Test TTS generation - returns audio URL"""
+    try:
+        audio_url = await generate_complete_tts(text, language)
+        return {
+            "status": "success",
+            "text": text,
+            "language": language,
+            "audio_url": audio_url
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
