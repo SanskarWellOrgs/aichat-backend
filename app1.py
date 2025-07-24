@@ -936,6 +936,12 @@ def remove_punctuation(text):
 # --- LaTeX fraction and cleanup helpers ---
 import re
 
+def process_response_text(text: str) -> str:
+    """Process response text to handle fractions and other formatting"""
+    # First convert LaTeX fractions to stacked format
+    text = latex_frac_to_stacked(text)
+    return text
+
 def latex_frac_to_stacked(text):
     # Replace all \frac{a}{b} with stacked plain text
     pattern = r"\\frac\s*\{([^{}]+)\}\{([^{}]+)\}"
@@ -2473,6 +2479,15 @@ Use it **properly for follow-up answers based on contex**.
         system_content += "Translate any Arabic content to English in your response. Never use Arabic.\n"
     system_content += "You are an expert assistant."
     
+    # Add math instruction to system content
+    SYSTEM_MATH_INSTRUCTION = """
+    When writing mathematical expressions with fractions:
+    1. Use \\frac{numerator}{denominator} format
+    2. Write complex equations clearly
+    3. Example: \\frac{x+1}{y-2} for (x+1)/(y-2)
+    """
+    system_content = SYSTEM_MATH_INSTRUCTION + system_content
+    # Build the system message
     system_message = {"role": "system", "content": system_content}
     user_message = {"role": "user", "content": user_content}
     messages = [system_message, user_message]
