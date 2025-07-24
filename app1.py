@@ -2596,8 +2596,23 @@ async def get_chat_detail(doc_id: str = Path(...)):
         # Ensure proper Unicode handling for history items
         if "history" in data:
             for item in data["history"]:
-                # Ensure strings are properly handled as UTF-8
+                # Handle content field which may contain Arabic text
+                if isinstance(item.get("content"), str):
+                    item["content"] = ensure_unicode(item["content"])
+                # Handle any other text fields that might contain Arabic
                 if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
                     item["question"] = item["question"].encode('utf-8').decode('utf-8')
                 if isinstance(item.get("answer"), str):
                     item["answer"] = item["answer"].encode('utf-8').decode('utf-8')
@@ -2613,6 +2628,34 @@ async def get_chat_detail(doc_id: str = Path(...)):
 
 @app.get("/api/chat-detail-ar/{doc_id}")
 async def get_chat_detail_ar(doc_id: str = Path(...)):
+    """Get Arabic chat detail with proper Unicode handling"""
+    doc_ref = db.collection("chat_details_ar").document(doc_id)
+    doc = doc_ref.get()
+
+    if doc.exists:
+        data = doc.to_dict()
+        data["id"] = doc.id
+        
+        # Ensure proper Unicode handling for history items
+        if "history" in data:
+            for item in data["history"]:
+                # Handle content field which may contain Arabic text
+                if isinstance(item.get("content"), str):
+                    item["content"] = ensure_unicode(item["content"])
+                # Handle any other text fields that might contain Arabic
+                if isinstance(item.get("question"), str):
+                    item["question"] = ensure_unicode(item["question"])
+                if isinstance(item.get("answer"), str):
+                    item["answer"] = ensure_unicode(item["answer"])
+        
+        # Return with proper encoding headers
+        return JSONResponse(
+            content=data,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    else:
+        raise HTTPException(status_code=404, detail="Document not found")
     """Get Arabic chat detail with proper Unicode handling"""
     doc_ref = db.collection("chat_details_ar").document(doc_id)
     doc = doc_ref.get()
@@ -2658,15 +2701,83 @@ async def get_chat_detail_avatar(doc_id: str = Path(...)):
 @app.post("/api/chat-detail-store")
 async def add_chat_history(entry: ChatHistoryEntry):
     """
-    Append a chat history entry to Firestore.
-
-    NOTE: entry.content may contain Unicode (e.g. Arabic). Do NOT encode or re-encode; save directly as Python str.
+    Append a chat history entry to Firestore with proper Unicode handling.
     """
     type_mapping = {
         "ar": "chat_details_ar",
         "avatar": "avatarchatdetails",
         "normal": "chat_detail",
     }
+    
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
+    
+    try:
+        # Ensure proper Unicode handling for content
+        entry_dict = {
+            "id": entry.id,
+            "role": entry.role,
+            "content": ensure_unicode(entry.content),  # Handle Arabic text
+            "audiourl": entry.audiourl,
+            "imageselected": entry.imageselected,
+            "encoding": "utf-8"  # Mark as UTF-8 encoded
+        }
+        
+        # Get existing history or create new
+        doc_ref = db.collection(collection_name).document(entry.chat_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            history = data.get("history", [])
+            history.append(entry_dict)
+            doc_ref.update({"history": history})
+        else:
+            doc_ref.set({"history": [entry_dict]})
+            
+        return JSONResponse(
+            content={"status": "success", "message": "Chat history updated"},
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to store chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    collection_name = type_mapping.get(entry.type)
+    if not collection_name:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {entry.type}")
+    
+    try:
+        # Ensure proper Unicode handling for content
+        entry_dict = {
+            "id": entry.id,
+            "role": entry.role,
+            "content": ensure_unicode(entry.content),  # Handle Arabic text
+            "audiourl": entry.audiourl,
+            "imageselected": entry.imageselected,
+            "encoding": "utf-8"  # Mark as UTF-8 encoded
+        }
+        
+        # Get existing history or create new
+        doc_ref = db.collection(collection_name).document(entry.chat_id)
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            history = data.get("history", [])
+            history.append(entry_dict)
+            doc_ref.update({"history": history})
+        else:
+            doc_ref.set({"history": [entry_dict]})
+            
+        return {"status": "success", "message": "Chat history updated"}
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to store chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     collection_name = type_mapping.get(entry.type)
     if not collection_name:
