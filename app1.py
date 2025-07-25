@@ -291,7 +291,7 @@ async def vector_embedding(curriculum, file_url):
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
     
     # Initialize embeddings
-    embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+    embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     
@@ -378,7 +378,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 vectors = await asyncio.to_thread(
                     FAISS.load_local,
                     idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
                     allow_dangerous_deserialization=True,
                 )
                 print(f"[RAG] Successfully loaded local FAISS index for {curriculum}")
@@ -397,7 +397,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 vectors = await asyncio.to_thread(
                     FAISS.load_local,
                     idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
                     allow_dangerous_deserialization=True,
                 )
                 print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
@@ -633,7 +633,7 @@ OPENAI_TO_EDGE_VOICE = {
 
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
+EMBEDDING_MODEL = 'text-embedding-3-large'
 MAX_TOKENS_PER_CHUNK = 4096
 RUNWARE_API_KEY = os.getenv("RUNWARE_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
@@ -982,7 +982,7 @@ async def vision_caption_openai(img: Image.Image = None, image_url: str = None) 
         ]}
     ]
     resp = openai.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4.1-mini",
         messages=messages,
         max_tokens=256,
         temperature=0.5
@@ -1136,7 +1136,7 @@ async def upload_audio(request: Request,
             af = open(local_path, "rb")
             result = openai.audio.transcriptions.create(
                 file=af,
-                model="whisper-1",
+                model="gpt-4o-transcribe",
                 language=whisper_lang
             )
             transcription = result.text.strip()
@@ -1157,7 +1157,7 @@ async def upload_audio(request: Request,
         buf.name = os.path.basename(urllib.parse.urlparse(audio_url).path) or f"{uuid.uuid4()}.wav"
         result = openai.audio.transcriptions.create(
             file=buf,
-            model="whisper-1",
+            model="gpt-4o-transcribe",
             language=whisper_lang
         )
         transcription = result.text.strip()
@@ -2564,7 +2564,7 @@ Use it **properly for follow-up answers based on contex**.
 
         try:
             stream = openai.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4.1-mini",
                 messages=messages,
                 stream=True
             )
@@ -2688,7 +2688,7 @@ async def get_full_answer(
     messages = [system_message, user_message]
 
     resp = openai.chat.completions.create(
-        model="gpt-4.1",
+        model="gpt-4.1-mini",
         messages=messages,
         temperature=0.5,
         max_tokens=2000,
@@ -3136,7 +3136,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3377,7 +3377,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
