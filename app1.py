@@ -295,14 +295,15 @@ async def vector_embedding(curriculum, file_url):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     
-    if await check_index_in_bucket(curriculum):
-        try:
-            print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
-            await download_index_from_bucket(curriculum)
-            print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
-            return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
-        except Exception as e:
-            print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
+    # DISABLED: Firebase fallback - force local rebuild with new embedding model
+    # if await check_index_in_bucket(curriculum):
+    #     try:
+    #         print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
+    #         await download_index_from_bucket(curriculum)
+    #         print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
+    #         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+    #     except Exception as e:
+    #         print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
     
     # Process the document
     try:
@@ -388,24 +389,25 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 print(f"[RAG][ERROR] Failed to load local FAISS index: {str(e)}")
                 # Fall through to rebuilding the index
         
+        # DISABLED: Firebase fallback - force local rebuild with new embedding model
         # If local load failed or doesn't exist, check Firebase Storage
-        print(f"[RAG] Checking Firebase Storage for FAISS index: {curriculum}")
-        if await check_index_in_bucket(curriculum):
-            try:
-                print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
-                await download_index_from_bucket(curriculum)
-                vectors = await asyncio.to_thread(
-                    FAISS.load_local,
-                    idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
-                    allow_dangerous_deserialization=True,
-                )
-                print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
-                curriculum_vectors[curriculum] = vectors
-                return vectors
-            except Exception as e:
-                print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
-                # Fall through to rebuilding the index
+        #print(f"[RAG] Local FAISS index not found, building new index with text-embedding-3-large for {curriculum}")
+        # if await check_index_in_bucket(curriculum):
+        #     try:
+        #         print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
+        #         await download_index_from_bucket(curriculum)
+        #         vectors = await asyncio.to_thread(
+        #             FAISS.load_local,
+        #             idx_dir,
+        #             OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
+        #             allow_dangerous_deserialization=True,
+        #         )
+        #         print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
+        #         curriculum_vectors[curriculum] = vectors
+        #         return vectors
+        #     except Exception as e:
+        #         print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
+        #         # Fall through to rebuilding the index
         
         # If all else fails, rebuild the index from PDF
         print(f"[RAG] Building new FAISS index for {curriculum} from {pdf_url}")
