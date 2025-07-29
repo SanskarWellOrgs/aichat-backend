@@ -291,7 +291,7 @@ async def vector_embedding(curriculum, file_url):
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
     
     # Initialize embeddings
-    embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-large", api_key=os.getenv('OPENAI_API_KEY'))
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     
@@ -378,7 +378,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 vectors = await asyncio.to_thread(
                     FAISS.load_local,
                     idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    OpenAIEmbeddings(model="text-embedding-3-large", api_key=os.getenv('OPENAI_API_KEY')),
                     allow_dangerous_deserialization=True,
                 )
                 print(f"[RAG] Successfully loaded local FAISS index for {curriculum}")
@@ -397,7 +397,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 vectors = await asyncio.to_thread(
                     FAISS.load_local,
                     idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    OpenAIEmbeddings(model="text-embedding-3-large", api_key=os.getenv('OPENAI_API_KEY')),
                     allow_dangerous_deserialization=True,
                 )
                 print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
@@ -1198,6 +1198,7 @@ async def stream_answer(
     Stream an answer, delegating to cloud RAG for uploaded files/images.
     """
     print(f"[DEBUG] stream_answer called with question: {question}")
+
     print(f"[DEBUG] Parameters - role: {role}, curriculum: {curriculum}, language: {language}")
     
     # If Base64 file/image is provided, require explicit flag file_provided/image_provided
@@ -3136,7 +3137,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-large", api_key=os.getenv('OPENAI_API_KEY'))
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3377,7 +3378,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-large", api_key=os.getenv('OPENAI_API_KEY'))
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
