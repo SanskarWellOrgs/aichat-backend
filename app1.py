@@ -291,19 +291,18 @@ async def vector_embedding(curriculum, file_url):
     print(f"[RAG] vector_embedding called for curriculum={curriculum}, file_url={file_url}")
     
     # Initialize embeddings
-    embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
+    embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
     base_dir = os.path.dirname(os.path.abspath(__file__))
     idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
     
-    # DISABLED: Firebase fallback - force local rebuild with new embedding model
-    # if await check_index_in_bucket(curriculum):
-    #     try:
-    #         print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
-    #         await download_index_from_bucket(curriculum)
-    #         print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
-    #         return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
-    #     except Exception as e:
-    #         print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
+    if await check_index_in_bucket(curriculum):
+        try:
+            print(f"[RAG] Downloading existing FAISS index from bucket for {curriculum}")
+            await download_index_from_bucket(curriculum)
+            print(f"[RAG] Loading downloaded FAISS index from {idx_dir}")
+            return FAISS.load_local(idx_dir, embeddings, allow_dangerous_deserialization=True)
+        except Exception as e:
+            print(f"[RAG][ERROR] Failed to download/load FAISS index for {curriculum}: {e}")
     
     # Process the document
     try:
@@ -379,7 +378,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 vectors = await asyncio.to_thread(
                     FAISS.load_local,
                     idx_dir,
-                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
                     allow_dangerous_deserialization=True,
                 )
                 print(f"[RAG] Successfully loaded local FAISS index for {curriculum}")
@@ -389,25 +388,24 @@ async def get_or_load_vectors(curriculum, pdf_url):
                 print(f"[RAG][ERROR] Failed to load local FAISS index: {str(e)}")
                 # Fall through to rebuilding the index
         
-        # DISABLED: Firebase fallback - force local rebuild with new embedding model
         # If local load failed or doesn't exist, check Firebase Storage
-        #print(f"[RAG] Local FAISS index not found, building new index with text-embedding-3-large for {curriculum}")
-        # if await check_index_in_bucket(curriculum):
-        #     try:
-        #         print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
-        #         await download_index_from_bucket(curriculum)
-        #         vectors = await asyncio.to_thread(
-        #             FAISS.load_local,
-        #             idx_dir,
-        #             OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large"),
-        #             allow_dangerous_deserialization=True,
-        #         )
-        #         print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
-        #         curriculum_vectors[curriculum] = vectors
-        #         return vectors
-        #     except Exception as e:
-        #         print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
-        #         # Fall through to rebuilding the index
+        print(f"[RAG] Checking Firebase Storage for FAISS index: {curriculum}")
+        if await check_index_in_bucket(curriculum):
+            try:
+                print(f"[RAG] Downloading FAISS index from Firebase for {curriculum}")
+                await download_index_from_bucket(curriculum)
+                vectors = await asyncio.to_thread(
+                    FAISS.load_local,
+                    idx_dir,
+                    OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY')),
+                    allow_dangerous_deserialization=True,
+                )
+                print(f"[RAG] Successfully loaded FAISS index from Firebase for {curriculum}")
+                curriculum_vectors[curriculum] = vectors
+                return vectors
+            except Exception as e:
+                print(f"[RAG][ERROR] Failed to download/load Firebase FAISS index: {str(e)}")
+                # Fall through to rebuilding the index
         
         # If all else fails, rebuild the index from PDF
         print(f"[RAG] Building new FAISS index for {curriculum} from {pdf_url}")
@@ -635,7 +633,7 @@ OPENAI_TO_EDGE_VOICE = {
 
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EMBEDDING_MODEL = 'text-embedding-3-large'
+EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
 MAX_TOKENS_PER_CHUNK = 4096
 RUNWARE_API_KEY = os.getenv("RUNWARE_API_KEY")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY")
@@ -984,7 +982,7 @@ async def vision_caption_openai(img: Image.Image = None, image_url: str = None) 
         ]}
     ]
     resp = openai.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4o",
         messages=messages,
         max_tokens=256,
         temperature=0.5
@@ -1138,7 +1136,7 @@ async def upload_audio(request: Request,
             af = open(local_path, "rb")
             result = openai.audio.transcriptions.create(
                 file=af,
-                model="gpt-4o-transcribe",
+                model="whisper-1",
                 language=whisper_lang
             )
             transcription = result.text.strip()
@@ -1159,7 +1157,7 @@ async def upload_audio(request: Request,
         buf.name = os.path.basename(urllib.parse.urlparse(audio_url).path) or f"{uuid.uuid4()}.wav"
         result = openai.audio.transcriptions.create(
             file=buf,
-            model="gpt-4o-transcribe",
+            model="whisper-1",
             language=whisper_lang
         )
         transcription = result.text.strip()
@@ -2566,7 +2564,7 @@ Use it **properly for follow-up answers based on contex**.
 
         try:
             stream = openai.chat.completions.create(
-                model="gpt-4.1-mini",
+                model="gpt-4.1",
                 messages=messages,
                 stream=True
             )
@@ -2690,7 +2688,7 @@ async def get_full_answer(
     messages = [system_message, user_message]
 
     resp = openai.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         messages=messages,
         temperature=0.5,
         max_tokens=2000,
@@ -3138,7 +3136,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3379,7 +3377,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'), model="text-embedding-3-large")
+        embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
