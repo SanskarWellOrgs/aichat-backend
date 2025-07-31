@@ -109,7 +109,40 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Firebase setup (ensure service account JSON is present alongside app1.py)
 # Firebase setup (loads from FIREBASE_JSON env var if available, else from file)
+async def vector_embedding(curriculum_id, file_url):
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    FAISS_LOCAL_LOCATION = f'../faiss/faiss_index_{curriculum_id}'
+    if await check_index_in_bucket(curriculum_id):
+        await download_index_from_bucket(curriculum_id)
+        vectors = FAISS.load_local(FAISS_LOCAL_LOCATION, embeddings, allow_dangerous_deserialization=True)
+    else:
+        file_path = await download_file(file_url, curriculum_id)
+        file_extension = file_path.split('.')[-1].lower()
 
+        # Use appropriate loader based on file type
+        if file_extension == 'pdf':
+            loader = PyPDFLoader(file_path)
+        elif file_extension == 'docx':
+            loader = Docx2txtLoader(file_path)
+        else:
+            raise ValueError("Unsupported file type. Only PDF and DOCX are allowed.")
+
+        docs = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=25000, chunk_overlap=5000)
+        final_documents = text_splitter.split_documents(docs)
+        vectors = FAISS.from_documents(final_documents, embeddings)
+
+        # Save the FAISS index locally (this saves both index.faiss and index.pkl)
+        vectors.save_local(FAISS_LOCAL_LOCATION)
+
+        # Upload both index.faiss and index.pkl to Firebase Storage
+        await upload_index_to_bucket(curriculum_id)
+
+        # Clean up the downloaded file
+        os.remove(file_path)
+
+    return vectors
 
 if not firebase_admin._apps:
     FIREBASE_JSON = os.getenv("FIREBASE_JSON")
@@ -3012,6 +3045,7 @@ async def check_backend_dirs():
         "base_directory": base_dir,
         "directories": results
     }
+
 
 @app.get("/check-faiss-content/{curriculum_id}")
 async def check_faiss_content(curriculum_id: str):
