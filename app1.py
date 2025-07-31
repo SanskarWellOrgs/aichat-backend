@@ -142,6 +142,7 @@ curriculum_vectors = {}
 async def get_or_load_vectors(curriculum, pdf_url):
     """
     Loads FAISS index for curriculum from local disk only. Caches in memory for reuse.
+    If not present, builds new index from PDF.
     """
     print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
     if curriculum in curriculum_vectors:
@@ -162,12 +163,11 @@ async def get_or_load_vectors(curriculum, pdf_url):
             )
             curriculum_vectors[curriculum] = vectors
             return vectors
-        # Optional: If not found, auto-build (uncomment if needed)
-        # print(f"[RAG] No FAISS index found, building new index for {curriculum}")
-        # vectors = await vector_embedding(curriculum, pdf_url)
-        # curriculum_vectors[curriculum] = vectors
-        # return vectors
-        raise RuntimeError(f"FAISS index not found locally for curriculum {curriculum}")
+        else:
+            print(f"[RAG] No FAISS index found, building new index for {curriculum}")
+            vectors = await vector_embedding(curriculum, pdf_url)
+            curriculum_vectors[curriculum] = vectors
+            return vectors
     except Exception as e:
         print(f"[RAG][ERROR] Failed in get_or_load_vectors: {e}")
         raise
