@@ -113,14 +113,13 @@ async def vector_embedding(curriculum_id, file_url):
     from langchain_community.embeddings import HuggingFaceEmbeddings
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     FAISS_LOCAL_LOCATION = f'../faiss/faiss_index_{curriculum_id}'
-    if await check_index_in_bucket(curriculum_id):
-        await download_index_from_bucket(curriculum_id)
+    # ---- LOCAL INDEX CHECK ----
+    if os.path.exists(os.path.join(FAISS_LOCAL_LOCATION, "index.faiss")) and os.path.exists(os.path.join(FAISS_LOCAL_LOCATION, "index.pkl")):
         vectors = FAISS.load_local(FAISS_LOCAL_LOCATION, embeddings, allow_dangerous_deserialization=True)
     else:
         file_path = await download_file(file_url, curriculum_id)
         file_extension = file_path.split('.')[-1].lower()
 
-        # Use appropriate loader based on file type
         if file_extension == 'pdf':
             loader = PyPDFLoader(file_path)
         elif file_extension == 'docx':
@@ -132,16 +131,8 @@ async def vector_embedding(curriculum_id, file_url):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=25000, chunk_overlap=5000)
         final_documents = text_splitter.split_documents(docs)
         vectors = FAISS.from_documents(final_documents, embeddings)
-
-        # Save the FAISS index locally (this saves both index.faiss and index.pkl)
         vectors.save_local(FAISS_LOCAL_LOCATION)
-
-        # Upload both index.faiss and index.pkl to Firebase Storage
-        await upload_index_to_bucket(curriculum_id)
-
-        # Clean up the downloaded file
         os.remove(file_path)
-
     return vectors
 
 if not firebase_admin._apps:
