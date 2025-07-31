@@ -33,6 +33,9 @@ from pydantic import BaseModel
 from typing import Literal
 from google.cloud import firestore
 from datetime import datetime
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+import asyncio
 
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
@@ -135,6 +138,39 @@ executor = ThreadPoolExecutor()
 
 # In-memory FAISS vector cache per curriculum
 curriculum_vectors = {}
+
+async def get_or_load_vectors(curriculum, pdf_url):
+    """
+    Loads FAISS index for curriculum from local disk only. Caches in memory for reuse.
+    """
+    print(f"[RAG] get_or_load_vectors called for curriculum={curriculum}, pdf_url={pdf_url}")
+    if curriculum in curriculum_vectors:
+        print(f"[RAG] Using cached vectors for {curriculum}")
+        return curriculum_vectors[curriculum]
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    idx_dir = os.path.join(base_dir, 'faiss', f'faiss_index_{curriculum}')
+    exists = os.path.exists(idx_dir) and os.path.exists(os.path.join(idx_dir, 'index.faiss'))
+    print(f"[RAG] Local FAISS index check - dir={idx_dir}, exists={exists}")
+    try:
+        if exists:
+            print(f"[RAG] Loading FAISS index from disk for {curriculum}")
+            vectors = await asyncio.to_thread(
+                FAISS.load_local,
+                idx_dir,
+                OpenAIEmbeddings(model="text-embedding-ada-002", api_key=os.getenv('OPENAI_API_KEY')),
+                allow_dangerous_deserialization=True,
+            )
+            curriculum_vectors[curriculum] = vectors
+            return vectors
+        # Optional: If not found, auto-build (uncomment if needed)
+        # print(f"[RAG] No FAISS index found, building new index for {curriculum}")
+        # vectors = await vector_embedding(curriculum, pdf_url)
+        # curriculum_vectors[curriculum] = vectors
+        # return vectors
+        raise RuntimeError(f"FAISS index not found locally for curriculum {curriculum}")
+    except Exception as e:
+        print(f"[RAG][ERROR] Failed in get_or_load_vectors: {e}")
+        raise
 
 async def get_curriculum_url(curriculum):
     """Fetch curriculum PDF URL from Firestore with enhanced error handling."""
