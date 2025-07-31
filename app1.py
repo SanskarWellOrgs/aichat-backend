@@ -561,15 +561,11 @@ GRAPH_SYNONYMS = [
 
     '"GRAPH"',
     '"PLOT"',
-    '"GRAPH_CALCULATOR"',
-    '"GRAPHING"',
     '"رسم بياني"',
     '"آلة الرسم"',
     '"حاسبة الرسوم"',
     "GRAPH",
     "PLOT",
-    "GRAPH_CALCULATOR",
-    "GRAPHING",
     "رسم بياني",
     "آلة الرسم",
     "حاسبة الرسوم"
