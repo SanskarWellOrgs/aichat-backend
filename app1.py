@@ -33,9 +33,9 @@ from pydantic import BaseModel
 from typing import Literal
 from google.cloud import firestore
 from datetime import datetime
-from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 import asyncio
+from langchain.embeddings import HuggingFaceEmbeddings
 
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
@@ -158,7 +158,7 @@ async def get_or_load_vectors(curriculum, pdf_url):
             vectors = await asyncio.to_thread(
                 FAISS.load_local,
                 idx_dir,
-                OpenAIEmbeddings(model="text-embedding-ada-002", api_key=os.getenv('OPENAI_API_KEY')),
+                HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL),
                 allow_dangerous_deserialization=True,
             )
             curriculum_vectors[curriculum] = vectors
@@ -3018,7 +3018,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3259,7 +3259,7 @@ async def check_faiss_content(curriculum_id: str):
     """Check the content of a FAISS index to verify it's working correctly."""
     try:
         # Initialize embeddings
-        embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", api_key=os.getenv('OPENAI_API_KEY'))
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         
         # Get the FAISS index path
         base_dir = os.path.dirname(os.path.abspath(__file__))
