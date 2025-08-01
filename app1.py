@@ -791,26 +791,123 @@ def smart_chunker(text, min_length=120):
         print("[TTS CHUNK]", repr(buffer))
         yield buffer
 
-async def generate_weblink_perplexity(query):
+def is_youtube_request(query):
+    """Check if the user specifically requested YouTube content"""
+    youtube_keywords = ['youtube', 'video', 'فيديو', 'يوتيوب', 'مقطع', 'watch']
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in youtube_keywords)
+
+def filter_youtube_links(links, allow_youtube=False):
+    """Filter out YouTube links unless specifically requested"""
+    if allow_youtube:
+        return links
+    
+    filtered_links = []
+    youtube_domains = ['youtube.com', 'youtu.be', 'm.youtube.com']
+    
+    for link in links:
+        url = link.get('url', '')
+        if url and not any(domain in url.lower() for domain in youtube_domains):
+            filtered_links.append(link)
+    
+    return filtered_links
+
+def is_arabic_content(url, title, snippet=""):
+    """Check if content is likely Arabic based on URL patterns and text"""
+    if not url:
+        return False
+    
+    # Arabic domain indicators
+    arabic_domains = ['.sa', '.ae', '.eg', '.jo', '.lb', '.sy', '.iq', '.ye', '.om', '.kw', '.qa', '.bh']
+    arabic_subdomains = ['ar.', 'arabic.', 'عربي.']
+    arabic_paths = ['/ar/', '/arabic/', '/عربي/']
+    
+    url_lower = url.lower()
+    
+    # Check domain
+    if any(domain in url_lower for domain in arabic_domains):
+        return True
+    
+    # Check subdomains
+    if any(subdomain in url_lower for subdomain in arabic_subdomains):
+        return True
+    
+    # Check paths
+    if any(path in url_lower for path in arabic_paths):
+        return True
+    
+    # Check if title or snippet contains Arabic characters
+    text_to_check = f"{title} {snippet}"
+    if any('\u0600' <= char <= '\u06FF' for char in text_to_check):
+        return True
+    
+    return False
+
+def validate_and_clean_links(links):
+    """Validate links and remove null/empty ones"""
+    cleaned_links = []
+    
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+            
+        url = link.get('url', '').strip()
+        title = link.get('title', '').strip()
+        
+        # Skip if URL is null, empty, or invalid
+        if not url or url.lower() in ['null', 'none', '']:
+            continue
+            
+        # Skip if URL doesn't start with http
+        if not url.startswith(('http://', 'https://')):
+            continue
+            
+        # Clean up the link
+        cleaned_link = {
+            'url': url,
+            'title': title if title else 'Untitled',
+            'summary': link.get('summary', ''),
+            'desc': link.get('desc', '')
+        }
+        
+        cleaned_links.append(cleaned_link)
+    
+    return cleaned_links
+
+async def generate_weblink_perplexity(query, language="en"):
     headers = {
         "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
         "Content-Type": "application/json"
     }
+    
+    # Check if YouTube is specifically requested
+    allow_youtube = is_youtube_request(query)
+    
+    # Adjust system prompt based on language and requirements
+    if language.lower().startswith('ar'):
+        system_prompt = (
+            "يرجى الإجابة باللغة العربية فقط. قدم روابط لمواقع عربية موثوقة فقط. "
+            "تجنب المواقع الإنجليزية والمواقع غير العربية. "
+            "لا تقدم روابط يوتيوب إلا إذا طُلب ذلك صراحة. "
+            "تأكد من أن جميع الروابط صالحة وليست فارغة."
+        )
+    else:
+        system_prompt = (
+            "Provide reliable, educational links. Avoid YouTube links unless specifically requested. "
+            "Ensure all links are valid and not null. Focus on authoritative sources."
+        )
+    
     payload = {
-        "model": "sonar-pro",   # Use sonar-pro or sonar, see your model list
+        "model": "sonar-pro",
         "messages": [
-            {"role": "system", "content": "Be precise. Provide a relevant link and a concise summary of what it contains."},
-            {"role": "user",   "content": query}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query}
         ],
         "max_tokens": 400,
         "temperature": 0.5
     }
 
-    # Print payload and headers for debugging
-    print("DEBUG - Headers:")
-    pprint.pprint(headers)
-    print("DEBUG - Payload:")
-    pprint.pprint(payload)
+    print(f"[DEBUG] Perplexity query: {query}, Language: {language}, Allow YouTube: {allow_youtube}")
 
     async with httpx.AsyncClient(timeout=20) as client:
         try:
@@ -820,30 +917,72 @@ async def generate_weblink_perplexity(query):
                 json=payload
             )
             print("DEBUG - Status Code:", resp.status_code)
-            print("DEBUG - Response Text:", resp.text)
             resp.raise_for_status()
             data = resp.json()
 
             # Look for actual Perplexity researched web links
             if "search_results" in data and data["search_results"]:
-                first = data["search_results"][0]
-                url = first.get("url", "")
-                title = first.get("title", "")
-                snippet = first.get("snippet", "")
-                summary = f"{title}: {snippet}" if snippet else title
-                return {"url": url, "desc": summary}
+                # Process all search results, not just the first one
+                raw_links = []
+                for result in data["search_results"]:
+                    url = result.get("url", "")
+                    title = result.get("title", "")
+                    snippet = result.get("snippet", "")
+                    
+                    if url:  # Only add if URL exists
+                        raw_links.append({
+                            "url": url,
+                            "title": title,
+                            "summary": f"{title}: {snippet}" if snippet else title,
+                            "desc": snippet
+                        })
+                
+                # Clean and validate links
+                cleaned_links = validate_and_clean_links(raw_links)
+                
+                # Filter YouTube if not requested
+                filtered_links = filter_youtube_links(cleaned_links, allow_youtube)
+                
+                # Filter for Arabic content if Arabic language
+                if language.lower().startswith('ar'):
+                    arabic_links = []
+                    for link in filtered_links:
+                        if is_arabic_content(link['url'], link['title'], link.get('desc', '')):
+                            arabic_links.append(link)
+                    filtered_links = arabic_links if arabic_links else filtered_links[:2]  # Fallback to first 2 if no Arabic found
+                
+                # Return the best link or fallback
+                if filtered_links:
+                    return {"url": filtered_links[0]["url"], "desc": filtered_links[0]["summary"]}
+                else:
+                    # No valid links found after filtering
+                    fallback_url = f"https://www.perplexity.ai/search?q={urllib.parse.quote(query)}"
+                    return {"url": fallback_url, "desc": "No suitable links found after filtering."}
+                    
             elif "citations" in data and data["citations"]:
-                url = data["citations"][0]
-                summary = "See the cited resource."
-                return {"url": url, "desc": summary}
-            else:
-                url = f"https://www.perplexity.ai/search?q={urllib.parse.quote(query)}"
-                summary = "No summary available."
-                return {"url": url, "desc": summary}
+                # Process citations
+                citations = data["citations"]
+                valid_citations = [url for url in citations if url and url.strip() and url.startswith(('http://', 'https://'))]
+                
+                if valid_citations:
+                    # Filter YouTube from citations too
+                    if not allow_youtube:
+                        youtube_domains = ['youtube.com', 'youtu.be', 'm.youtube.com']
+                        valid_citations = [url for url in valid_citations 
+                                         if not any(domain in url.lower() for domain in youtube_domains)]
+                    
+                    if valid_citations:
+                        return {"url": valid_citations[0], "desc": "See the cited resource."}
+                
+            # Fallback if no valid results
+            fallback_url = f"https://www.perplexity.ai/search?q={urllib.parse.quote(query)}"
+            return {"url": fallback_url, "desc": "No summary available."}
+            
         except Exception as e:
             print("[Perplexity API ERROR]", str(e))
+            fallback_url = f"https://www.perplexity.ai/search?q={urllib.parse.quote(query)}"
             return {
-                "url": f"https://www.perplexity.ai/search?q={urllib.parse.quote(query)}",
+                "url": fallback_url,
                 "desc": f"Could not get summary due to error: {e}"
             }
 async def generate_runware_image(prompt):
@@ -1066,9 +1205,9 @@ async def upload_audio(request: Request,
     return {"text": transcription}
 
 
-async def generate_weblink_and_summary(prompt):
-    # Use the real Perplexity API function to get web link and summary
-    result = await generate_weblink_perplexity(prompt)
+async def generate_weblink_and_summary(prompt, language="en"):
+    # Use the improved Perplexity API function to get web link and summary
+    result = await generate_weblink_perplexity(prompt, language)
     return {
         "url": result.get("url", "https://perplexity.ai/search?q=" + prompt.replace(' ', '+')),
         "summary": result.get("desc", "No summary available.")
@@ -1285,18 +1424,26 @@ async def stream_answer(
                 "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
                 "Content-Type": "application/json"
             }
+            # Check if YouTube is specifically requested
+            allow_youtube = is_youtube_request(prompt_desc)
+            
             # Use Arabic-only links when language indicates Arabic; otherwise default to English
             lang_lower = (language or "").strip().lower()
-            if lang_lower == "arabic":
+            if lang_lower == "arabic" or lang_lower.startswith("ar"):
                 system_prompt = (
                     "يرجى الإجابة باللغة العربية فقط. بعد الإجابة، قدم قائمة بأهم الروابط العربية المتعلقة بالسؤال، "
                     "يجب أن تكون جميع الصفحات والمصادر باللغة العربية فقط، وتجنب المواقع الإنجليزية، "
+                    "لا تقدم روابط يوتيوب إلا إذا طُلب ذلك صراحة، "
+                    "تأكد من أن جميع الروابط صالحة وليست فارغة، "
                     "وأضف ملخصًا موجزًا لكل رابط باللغة العربية أيضًا. أرجع كل شيء بتنسيق JSON."
                 )
             else:
+                youtube_instruction = "Include YouTube links if specifically requested, otherwise avoid them. " if allow_youtube else "Avoid YouTube links unless specifically requested. "
                 system_prompt = (
                     "Please answer as follows: First, write a comprehensive, Wikipedia-style explanation of the user's question/topic in 2–4 paragraphs. "
-                    "After the explanation, provide a list of the most relevant web links, each with a title and a 1–2 sentence summary of what the link contains. Return all in JSON."
+                    "After the explanation, provide a list of the most relevant web links from authoritative sources. "
+                    f"{youtube_instruction}"
+                    "Ensure all links are valid and not null. Each link should have a title and a 1–2 sentence summary. Return all in JSON."
                 )
 
             payload = {
@@ -1325,22 +1472,87 @@ async def stream_answer(
                         msg_content = data['choices'][0]['message']['content']
                         raw_expl = msg_content.split('```')[0].strip()
                         explanation = raw_expl
+                        
                         try:
                             parsed = json.loads(msg_content)
                             explanation = parsed.get('explanation', explanation)
-                            links = parsed.get('links', [])
+                            raw_links = parsed.get('links', [])
                         except Exception:
+                            raw_links = []
                             if data.get('search_results'):
-                                links = [{'title': r.get('title', ''), 'url': r.get('url', '')} for r in data.get('search_results', [])]
+                                for r in data.get('search_results', []):
+                                    if r.get('url'):  # Only add if URL exists
+                                        raw_links.append({
+                                            'title': r.get('title', ''), 
+                                            'url': r.get('url', ''),
+                                            'summary': r.get('snippet', ''),
+                                            'desc': r.get('snippet', '')
+                                        })
                             elif data.get('citations'):
-                                links = [{'title': '', 'url': u} for u in data.get('citations', [])]
+                                for u in data.get('citations', []):
+                                    if u and u.strip():  # Only add non-empty URLs
+                                        raw_links.append({'title': '', 'url': u, 'summary': '', 'desc': ''})
+                        
+                        # Clean and validate links
+                        cleaned_links = validate_and_clean_links(raw_links)
+                        print(f"[DEBUG] Cleaned links count: {len(cleaned_links)}")
+                        
+                        # Filter YouTube if not requested
+                        filtered_links = filter_youtube_links(cleaned_links, allow_youtube)
+                        print(f"[DEBUG] After YouTube filter: {len(filtered_links)}")
+                        
+                        # Filter for Arabic content if Arabic language
+                        if lang_lower == "arabic" or lang_lower.startswith("ar"):
+                            arabic_links = []
+                            for link in filtered_links:
+                                if is_arabic_content(link['url'], link['title'], link.get('desc', '')):
+                                    arabic_links.append(link)
+                            
+                            if arabic_links:
+                                links = arabic_links
+                                print(f"[DEBUG] Arabic links found: {len(arabic_links)}")
+                            else:
+                                # If no Arabic links found, take first 2 filtered links as fallback
+                                links = filtered_links[:2]
+                                print(f"[DEBUG] No Arabic links found, using fallback: {len(links)}")
+                        else:
+                            links = filtered_links
+                        
+                        # Ensure we don't send null URLs to frontend
+                        final_links = []
+                        for link in links:
+                            if link.get('url') and link['url'].strip():
+                                final_links.append(link)
+                        
+                        print(f"[DEBUG] Final links to send: {len(final_links)}")
+                        for i, link in enumerate(final_links):
+                            print(f"[DEBUG] Link {i+1}: {link.get('url', 'NO_URL')}")
+                        
+                        links = final_links
+                        
+                        # Final safety check - ensure no null/empty URLs are sent to frontend
+                        safe_links = []
+                        for link in links:
+                            url = link.get('url', '').strip()
+                            if url and url.lower() not in ['null', 'none', ''] and url.startswith(('http://', 'https://')):
+                                # Ensure all required fields exist
+                                safe_link = {
+                                    'url': url,
+                                    'title': link.get('title', 'Untitled').strip() or 'Untitled',
+                                    'summary': link.get('summary', '').strip(),
+                                    'desc': link.get('desc', '').strip()
+                                }
+                                safe_links.append(safe_link)
+                        
+                        print(f"[DEBUG] Safe links after final validation: {len(safe_links)}")
+                        
                         # Send structural Perplexity response to the frontend
-                        yield f"data: {json.dumps({'type': 'perplexity_full', 'explanation': explanation, 'links': links})}\n\n"
+                        yield f"data: {json.dumps({'type': 'perplexity_full', 'explanation': explanation, 'links': safe_links})}\n\n"
                         # TTS: read explanation and each link summary with Edge TTS
                         text_to_read = ''
                         if explanation:
                             text_to_read += explanation
-                        for link in links:
+                        for link in safe_links:
                             summary = link.get('summary') or link.get('desc') or ''
                             if summary:
                                 text_to_read += ' ' + summary
@@ -1380,10 +1592,10 @@ async def stream_answer(
     - For fractions, use \frac{numerator}{denominator}. For example:
       $$\frac{2x - 5}{x + 3}$$
     - Arabic text inside equations should be wrapped in \text{}. For example:
-      $$f(x) = \begin{cases}
-      2x + 1 & \text{إذا كان } x < 3 \\
-      -x + 5 & \text{إذا كان } x \geq 3
-      \end{cases}$$
+      $$f(x) = \\begin{cases}
+      2x + 1 & \\text{إذا كان } x < 3 \\\\
+      -x + 5 & \\text{إذا كان } x \\geq 3
+      \\end{cases}$$
     - Use proper variable names (x, y) and standard mathematical notation.
 
 ****STRICT REQUIREMENTS****
@@ -3346,6 +3558,61 @@ async def check_faiss_content(curriculum_id: str):
 async def test_cors():
     """Test endpoint for CORS."""
     return {"message": "CORS is working!"}
+
+@app.get("/test-weblink-filtering")
+async def test_weblink_filtering(
+    query: str = Query("machine learning", description="Search query to test"),
+    language: str = Query("en", description="Language (en/ar)"),
+    include_youtube: bool = Query(False, description="Whether to include YouTube in query")
+):
+    """Test endpoint to verify weblink filtering works correctly"""
+    try:
+        # Modify query to include YouTube request if needed
+        test_query = f"{query} youtube video" if include_youtube else query
+        
+        result = await generate_weblink_perplexity(test_query, language)
+        
+        # Also test the filtering functions directly
+        test_links = [
+            {"url": "https://youtube.com/watch?v=123", "title": "YouTube Video", "summary": "A video"},
+            {"url": "https://wikipedia.org/wiki/test", "title": "Wikipedia", "summary": "Wiki article"},
+            {"url": "", "title": "Empty URL", "summary": "Should be filtered"},
+            {"url": "null", "title": "Null URL", "summary": "Should be filtered"},
+            {"url": "https://ar.wikipedia.org/wiki/test", "title": "Arabic Wiki", "summary": "مقال عربي"}
+        ]
+        
+        # Test filtering functions
+        cleaned = validate_and_clean_links(test_links)
+        youtube_filtered = filter_youtube_links(cleaned, include_youtube)
+        
+        # Test Arabic detection
+        arabic_results = []
+        for link in cleaned:
+            is_arabic = is_arabic_content(link['url'], link['title'], link.get('summary', ''))
+            arabic_results.append({
+                "url": link['url'],
+                "is_arabic": is_arabic
+            })
+        
+        return {
+            "query": test_query,
+            "language": language,
+            "include_youtube": include_youtube,
+            "perplexity_result": result,
+            "test_filtering": {
+                "original_count": len(test_links),
+                "after_cleaning": len(cleaned),
+                "after_youtube_filter": len(youtube_filtered),
+                "arabic_detection": arabic_results
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "query": query,
+            "language": language
+        }
 
 @app.get("/test-tts")
 async def test_tts(text: str = Query("Hello, this is a test"), language: str = Query("en")):
