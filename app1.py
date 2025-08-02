@@ -37,6 +37,50 @@ from langchain_community.vectorstores import FAISS
 import asyncio
 from langchain.embeddings import HuggingFaceEmbeddings
 
+# ============================================================================
+# PRE-COMPILED REGEX PATTERNS FOR PERFORMANCE OPTIMIZATION
+# ============================================================================
+
+# Text processing patterns
+LATEX_PATTERN = re.compile(r'\\[a-zA-Z]+')
+WHITESPACE_PATTERN = re.compile(r'\s+')
+CURLY_BRACES_PATTERN = re.compile(r'[{}]')
+UNDERSCORE_PATTERN = re.compile(r'_')
+
+# Emoji removal pattern
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map symbols
+    "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "]+"
+)
+
+# Sentence splitting patterns (for both English and Arabic)
+SENTENCE_SPLIT_PATTERN = re.compile(r'(?<=[\.\!\؟\?])\s+')
+SENTENCE_END_PATTERN = re.compile(r'([.!?])(\s|$)')
+
+# Punctuation removal pattern
+PUNCTUATION_PATTERN = re.compile(r'[{}]+'.format(re.escape(string.punctuation)))
+
+# MCQ detection patterns
+MCQ_ANSWER_PATTERN = re.compile(r'\d+\.\s*[a-d]', re.IGNORECASE)
+MCQ_SEQUENCE_PATTERN = re.compile(r'(\d+\.\s*[a-d]\s*)+', re.IGNORECASE)
+
+# Arabic text detection pattern
+ARABIC_CHAR_PATTERN = re.compile(r'[\u0600-\u06FF]')
+
+# LaTeX math cleanup patterns
+LATEX_COMMANDS_PATTERN = re.compile(r'\\[a-zA-Z]+')
+DOLLAR_SIGNS_PATTERN = re.compile(r'\$')
+BACKSLASH_PATTERN = re.compile(r'\\')
+
+print("[REGEX] Pre-compiled regex patterns loaded successfully")
+
+# ============================================================================
 
 # Inline RAG helper functions (formerly in backend/rag_text_response_image56.py)
 try:
@@ -736,16 +780,8 @@ def generate_matplotlib_graph(prompt):
     return f"{GRAPHS_BASE_URL}/{fname}"
 
 def remove_emojis(text):
-    # This regex removes almost all emojis and pictographs
-    return re.sub(
-        "["
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F680-\U0001F6FF"  # transport & map symbols
-        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
-        "\U00002702-\U000027B0"
-        "\U000024C2-\U0001F251"
-        "]+", '', text)
+    """Remove emojis using pre-compiled pattern - MUCH faster"""
+    return EMOJI_PATTERN.sub('', text)
 
 def extract_text_from_pdf(pdf_path):
     reader = PdfReader(pdf_path)
@@ -771,13 +807,12 @@ def text_to_chunks(text, max_tokens):
     return chunks
 
 def split_into_sentences(text):
-    import re
-    # Split by punctuation (both Arabic and English)
-    return [s.strip() for s in re.split(r'(?<=[\.\!\؟\?])\s+', text) if s.strip()]
+    """Split text into sentences using pre-compiled pattern - MUCH faster"""
+    return [s.strip() for s in SENTENCE_SPLIT_PATTERN.split(text) if s.strip()]
 
 def smart_chunker(text, min_length=120):
-    import re
-    sentences = [s.strip() for s in re.split(r'(?<=[\.\!\؟\?])\s+', text) if s.strip()]
+    """Smart text chunking using pre-compiled sentence pattern - MUCH faster"""
+    sentences = [s.strip() for s in SENTENCE_SPLIT_PATTERN.split(text) if s.strip()]
     buffer = ""
     for s in sentences:
         if len(buffer) + len(s) < min_length:
@@ -1032,27 +1067,29 @@ async def vision_caption_openai(img: Image.Image = None, image_url: str = None) 
 
 
 def remove_punctuation(text):
-    return re.sub(r'[{}]+'.format(re.escape(string.punctuation)), '', text)
+    """Remove punctuation using pre-compiled pattern - MUCH faster"""
+    return PUNCTUATION_PATTERN.sub('', text)
 
 
 
 def sanitize_for_tts(text):
+    """Clean text for TTS using pre-compiled patterns - MUCH faster"""
     # Remove LaTeX commands (\frac, \left, \right, etc.)
-    text = re.sub(r'\\[a-zA-Z]+', '', text)
-    text = text.replace('{', '').replace('}', '')
-    text = text.replace('$', '')
-    text = text.replace('\\', '')
+    text = LATEX_COMMANDS_PATTERN.sub('', text)
+    text = CURLY_BRACES_PATTERN.sub('', text)
+    text = DOLLAR_SIGNS_PATTERN.sub('', text)
+    text = BACKSLASH_PATTERN.sub('', text)
     text = text.replace('^', ' أس ')  # Say "power" in Arabic
-    text = re.sub(r'_', ' ', text)   # Say "sub"
-    text = re.sub(r'\s+', ' ', text)
+    text = UNDERSCORE_PATTERN.sub(' ', text)   # Say "sub"
+    text = WHITESPACE_PATTERN.sub(' ', text)
     return text.strip()
 
 
 
 def remove_latex(text):
-    # Remove remaining LaTeX commands and curly braces
-    text = re.sub(r"\\[a-zA-Z]+", "", text)
-    text = text.replace("{", "").replace("}", "")
+    """Remove remaining LaTeX commands and curly braces using pre-compiled patterns - MUCH faster"""
+    text = LATEX_COMMANDS_PATTERN.sub("", text)
+    text = CURLY_BRACES_PATTERN.sub("", text)
     return text
 
 
@@ -1558,7 +1595,7 @@ async def stream_answer(
                                 text_to_read += ' ' + summary
                         if text_to_read:
                             print("[WEBLINK TTS] text_to_read:", repr(text_to_read))
-                            for sent in re.split(r'(?<=[\.\!\؟\?])\s+', text_to_read):
+                            for sent in SENTENCE_SPLIT_PATTERN.split(text_to_read):
                                 sent = sent.strip()
                                 if not sent:
                                     continue
@@ -2697,7 +2734,7 @@ Use it **properly for follow-up answers based on contex**.
 
                 # Flush full sentences for TTS as soon as they complete
                 last = 0
-                for m in re.finditer(r'(?<=[\.\!\؟\?])\s+', buffer):
+                for m in SENTENCE_SPLIT_PATTERN.finditer(buffer):
                     end = m.end()
                     sent = buffer[last:end].strip()
                     if sent:
@@ -2717,19 +2754,6 @@ Use it **properly for follow-up answers based on contex**.
                 await update_chat_history_speech(user_id, question, answer_so_far)
             except Exception as e:
                 print("[ERROR] Failed to update chat history:", str(e))
-            
-            # Generate complete TTS audio file for the full response
-            try:
-                if answer_so_far.strip():
-                    print(f"[TTS] Generating complete audio for response ({len(answer_so_far)} chars)")
-                    audio_url = await generate_complete_tts(answer_so_far, language)
-                    if audio_url:
-                        yield f"data: {json.dumps({'type': 'complete_audio', 'audio_url': audio_url, 'text': answer_so_far})}\n\n"
-                        print(f"[TTS] Complete audio generated: {audio_url}")
-                    else:
-                        print("[TTS] Failed to generate complete audio")
-            except Exception as e:
-                print(f"[TTS ERROR] Failed to generate complete audio: {e}")
                 
         except Exception as ex:
             print("[FATAL ERROR in event_stream]", str(ex))
